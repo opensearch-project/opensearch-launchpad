@@ -19,6 +19,16 @@ Use OpenSearch Serverless for:
 
 **Do NOT use for Agentic Search** - use OpenSearch Domain instead (see aws-opensearch-domain.md).
 
+## Using Official AWS Documentation
+
+If the user has the `awslabs.aws-documentation-mcp-server` MCP server configured, use it to look up the latest official AWS documentation when needed during deployment. This is especially useful for:
+- Verifying current API parameters, collection types, and service limits for OpenSearch Serverless
+- Looking up IAM policy formats, data access policy syntax, and Bedrock model availability
+- Checking the latest details on automatic semantic enrichment, network policies, and encryption options
+- Resolving errors or unexpected behavior during deployment steps
+
+Search for relevant docs proactively (e.g. "OpenSearch Serverless create collection", "OpenSearch Serverless data access policy", "OpenSearch Serverless semantic enrichment") rather than relying solely on the instructions below, which may become outdated.
+
 ## Prerequisites
 
 Before starting Phase 5 deployment:

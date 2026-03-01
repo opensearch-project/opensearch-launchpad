@@ -46,9 +46,18 @@ Before starting Phase 5, add the required MCP servers to your power configuratio
       "disabled": false,
       "autoApprove": []
     },
+    "aws-docs": {
+      "command": "uvx",
+      "args": ["awslabs.aws-documentation-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      },
+      "disabled": false,
+      "autoApprove": []
+    },
     "opensearch-mcp-server": {
       "command": "uvx",
-      "args": ["opensearch-mcp-server@latest"],
+      "args": ["opensearch-mcp-server-py@latest"],
       "env": {
         "FASTMCP_LOG_LEVEL": "ERROR"
       },
@@ -213,20 +222,20 @@ This power provides an OpenSearch Search Solution building workflow. It collects
 - Ask one preference question at a time, in this order.
 - Present each question as a numbered list and ask the user to reply with the number of their choice.
 
-  **Budget:**
-  1. Flexible
-  2. Cost-sensitive
+- If `text_search_required=true`:
+  **Query pattern:**
+  1. Mostly-exact (e.g. "Carmencita 1894")
+  2. Mostly-semantic (e.g. "early silent films about dancers")
+  3. Balanced (mix of both)
 
   **Performance priority:**
   1. Speed-first
   2. Balanced
   3. Accuracy-first
 
-- If `text_search_required=true`:
-  **Query pattern:**
-  1. Mostly-exact (e.g. "Carmencita 1894")
-  2. Mostly-semantic (e.g. "early silent films about dancers")
-  3. Balanced (mix of both)
+  **Budget:**
+  1. Flexible
+  2. Cost-sensitive
 
 - If `text_search_required=true` and query pattern is balanced or mostly-semantic, ask deployment preference as a separate follow-up question:
 

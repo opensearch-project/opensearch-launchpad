@@ -28,6 +28,16 @@ Agentic search requires:
 
 OpenSearch Serverless does not support these requirements.
 
+## Using Official AWS Documentation
+
+If the user has the `awslabs.aws-documentation-mcp-server` MCP server configured, use it to look up the latest official AWS documentation when needed during deployment. This is especially useful for:
+- Verifying current API parameters, CLI syntax, and service limits for OpenSearch Service
+- Looking up IAM policy formats, Bedrock model IDs, and regional availability
+- Checking the latest best practices for domain configuration, security, and networking
+- Resolving errors or unexpected behavior during deployment steps
+
+Search for relevant docs proactively (e.g. "OpenSearch Service create domain", "OpenSearch ML connectors Bedrock") rather than relying solely on the instructions below, which may become outdated.
+
 ## Prerequisites
 
 Before starting Phase 5 deployment:
