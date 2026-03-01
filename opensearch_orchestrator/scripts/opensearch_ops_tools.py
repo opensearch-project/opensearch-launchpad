@@ -4860,12 +4860,13 @@ def create_bedrock_embedding_model(model_name: str) -> str:
 
 def create_and_attach_pipeline(
     pipeline_name: str,
-    pipeline_body: dict,
-    index_name: str,
+    pipeline_body: dict | None = None,
+    index_name: str = "",
     pipeline_type: str = "ingest",
     replace_if_exists: bool = True,
     is_hybrid_search: bool = False,
     hybrid_weights: list[float] | None = None,
+    body: dict | None = None,
 ) -> str:
     """Create a pipeline (ingest or search) and attach it to an index.
 
@@ -4896,15 +4897,33 @@ def create_and_attach_pipeline(
     Args:
         pipeline_name: The name of the pipeline to create.
         pipeline_body: The configuration of the pipeline (processors, etc.).
+            Optional for hybrid search pipelines where default normalization can be generated.
         index_name: The name of the index to attach the pipeline to.
         pipeline_type: The type of pipeline, either 'ingest' or 'search'. Defaults to 'ingest'.
         replace_if_exists: Delete and recreate pipeline when it already exists.
         is_hybrid_search: Whether the search pipeline is for hybrid lexical+semantic score blending.
         hybrid_weights: Weight array in [lexical, semantic] order.
+        body: Backward-compatible alias for `pipeline_body`.
 
     Returns:
         str: Success message or error.
     """
+    resolved_pipeline_body = pipeline_body if pipeline_body is not None else body
+    if resolved_pipeline_body is None:
+        resolved_pipeline_body = {}
+    if not isinstance(resolved_pipeline_body, dict):
+        return "Error: pipeline_body must be a JSON object."
+
+    resolved_index_name = str(index_name or "").strip()
+    if not resolved_index_name:
+        return "Error: index_name is required."
+
+    if pipeline_type == "ingest" and not resolved_pipeline_body:
+        return (
+            "Error: pipeline_body is required for ingest pipelines. "
+            "Provide processors/field_map configuration."
+        )
+
     def _extract_pipeline_source_fields(body: dict) -> list[str]:
         if not isinstance(body, dict):
             return []
@@ -5107,18 +5126,18 @@ def create_and_attach_pipeline(
 
     try:
         opensearch_client = _create_client()
-        normalized_pipeline_body = pipeline_body
+        normalized_pipeline_body = resolved_pipeline_body
         remap_notes: list[str] = []
         existed_before = False
 
         if pipeline_type == "ingest":
-            mapped_fields = _extract_mapped_fields(opensearch_client, index_name)
+            mapped_fields = _extract_mapped_fields(opensearch_client, resolved_index_name)
             normalized_pipeline_body, remap_notes, unresolved = _normalize_ingest_pipeline_body(
-                pipeline_body,
+                resolved_pipeline_body,
                 mapped_fields,
             )
             if unresolved:
-                requested_fields = _extract_pipeline_source_fields(pipeline_body)
+                requested_fields = _extract_pipeline_source_fields(resolved_pipeline_body)
                 available_fields = sorted(mapped_fields.keys())
                 return (
                     "Error: Ingest pipeline field_map source fields are invalid for this index mapping. "
@@ -5142,25 +5161,25 @@ def create_and_attach_pipeline(
 
             if existed_before and not replace_if_exists:
                 settings = {"index.default_pipeline": pipeline_name}
-                opensearch_client.indices.put_settings(index=index_name, body=settings)
+                opensearch_client.indices.put_settings(index=resolved_index_name, body=settings)
                 source_fields = _extract_pipeline_source_fields(normalized_pipeline_body)
                 hints_csv = ",".join(normalize_ingest_source_field_hints(source_fields))
                 return (
                     f"Ingest pipeline '{pipeline_name}' already exists and is attached to index "
-                    f"'{index_name}'. ingest_source_field_hints: {hints_csv}"
+                    f"'{resolved_index_name}'. ingest_source_field_hints: {hints_csv}"
                 )
 
             opensearch_client.ingest.put_pipeline(id=pipeline_name, body=normalized_pipeline_body)
             settings = {"index.default_pipeline": pipeline_name}
         elif pipeline_type == "search":
             resolved_weights = [0.5, 0.5]
-            normalized_search_pipeline_body = pipeline_body
+            normalized_search_pipeline_body = resolved_pipeline_body
             if is_hybrid_search:
                 resolved_weights, weights_error = _resolve_hybrid_weights(hybrid_weights)
                 if weights_error:
                     return f"Error: Invalid hybrid search weights: {weights_error}"
                 normalized_search_pipeline_body, hybrid_error = _normalize_hybrid_search_pipeline_body(
-                    pipeline_body,
+                    resolved_pipeline_body,
                     resolved_weights,
                 )
                 if hybrid_error:
@@ -5180,10 +5199,10 @@ def create_and_attach_pipeline(
 
             if existed_before and not replace_if_exists:
                 settings = {"index.search.default_pipeline": pipeline_name}
-                opensearch_client.indices.put_settings(index=index_name, body=settings)
+                opensearch_client.indices.put_settings(index=resolved_index_name, body=settings)
                 return (
                     f"Search pipeline '{pipeline_name}' already exists and is attached to index "
-                    f"'{index_name}'."
+                    f"'{resolved_index_name}'."
                 )
 
             # Use low-level client for search pipeline to ensure compatibility
@@ -5197,7 +5216,7 @@ def create_and_attach_pipeline(
             return f"Error: Invalid pipeline_type '{pipeline_type}'. Must be 'ingest' or 'search'."
 
         # Always re-attach after create/recreate so index settings are guaranteed.
-        opensearch_client.indices.put_settings(index=index_name, body=settings)
+        opensearch_client.indices.put_settings(index=resolved_index_name, body=settings)
         action = "recreated" if (existed_before and replace_if_exists) else "created"
         if pipeline_type == "ingest":
             source_fields = _extract_pipeline_source_fields(normalized_pipeline_body)
@@ -5205,16 +5224,16 @@ def create_and_attach_pipeline(
             suffix = f" ingest_source_field_hints: {hints_csv}"
             if remap_notes:
                 return (
-                    f"{pipeline_type.capitalize()} pipeline '{pipeline_name}' {action} and attached to index '{index_name}' successfully. "
+                    f"{pipeline_type.capitalize()} pipeline '{pipeline_name}' {action} and attached to index '{resolved_index_name}' successfully. "
                     f"field remap: {'; '.join(remap_notes)}.{suffix}"
                 )
             return (
                 f"{pipeline_type.capitalize()} pipeline '{pipeline_name}' {action} and attached to index "
-                f"'{index_name}' successfully.{suffix}"
+                f"'{resolved_index_name}' successfully.{suffix}"
             )
         return (
             f"{pipeline_type.capitalize()} pipeline '{pipeline_name}' {action} and attached to index "
-            f"'{index_name}' successfully."
+            f"'{resolved_index_name}' successfully."
         )
 
     except Exception as e:

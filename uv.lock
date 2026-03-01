@@ -713,7 +713,7 @@ wheels = [
 
 [[package]]
 name = "opensearch-orchestrator"
-version = "0.2.2"
+version = "0.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

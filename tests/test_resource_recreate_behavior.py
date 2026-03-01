@@ -157,7 +157,6 @@ def test_create_and_attach_pipeline_builds_default_hybrid_search_pipeline(monkey
 
     response = tools.create_and_attach_pipeline(
         pipeline_name="imdb_hybrid_search_pipeline",
-        pipeline_body={},
         index_name="imdb_titles",
         pipeline_type="search",
         is_hybrid_search=True,
@@ -180,6 +179,45 @@ def test_create_and_attach_pipeline_builds_default_hybrid_search_pipeline(monkey
     assert body["phase_results_processors"][0]["normalization-processor"]["normalization"]["technique"] == "min_max"
     assert body["phase_results_processors"][0]["normalization-processor"]["combination"]["technique"] == "arithmetic_mean"
     assert body["phase_results_processors"][0]["normalization-processor"]["combination"]["parameters"]["weights"] == [0.2, 0.8]
+
+
+def test_create_and_attach_pipeline_accepts_body_alias_for_hybrid_search(monkeypatch):
+    fake_client = _FakeClient(index_exists=False)
+    monkeypatch.setattr(tools, "_create_client", lambda: fake_client)
+
+    response = tools.create_and_attach_pipeline(
+        pipeline_name="imdb_hybrid_search_pipeline_alias",
+        body={},
+        index_name="imdb_titles",
+        pipeline_type="search",
+        is_hybrid_search=True,
+        hybrid_weights=[0.4, 0.6],
+        replace_if_exists=True,
+    )
+
+    lowered = response.lower()
+    assert "created and attached" in lowered
+    put_requests = [
+        item for item in fake_client.transport.requests
+        if item[0] == "PUT" and item[1] == "/_search/pipeline/imdb_hybrid_search_pipeline_alias"
+    ]
+    assert put_requests
+    body = put_requests[-1][2]
+    assert body["phase_results_processors"][0]["normalization-processor"]["combination"]["parameters"]["weights"] == [0.4, 0.6]
+
+
+def test_create_and_attach_pipeline_rejects_missing_ingest_body(monkeypatch):
+    fake_client = _FakeClient(index_exists=False)
+    monkeypatch.setattr(tools, "_create_client", lambda: fake_client)
+
+    response = tools.create_and_attach_pipeline(
+        pipeline_name="imdb_ingest_pipeline",
+        index_name="imdb_titles",
+        pipeline_type="ingest",
+        replace_if_exists=True,
+    )
+
+    assert "pipeline_body is required for ingest pipelines" in response
 
 
 def test_create_and_attach_pipeline_rejects_invalid_hybrid_search_pipeline_body(monkeypatch):

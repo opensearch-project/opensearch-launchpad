@@ -126,28 +126,19 @@ Use the opensearch-orchestrator MCP tools to guide the user from requirements to
 
 ### Phase 3: Plan
 - Call `start_planning()` to get an initial architecture proposal from the client LLM planner.
-- If `start_planning()` returns `manual_planning_required=true`, use the client LLM to draft
-  planner turns using the returned `manual_planner_system_prompt` and
-  `manual_planner_initial_input`, then call `set_plan_from_planning_complete(...)`
-  once the user confirms.
+- If `start_planning()` returns `manual_planning_required=true`, follow the returned planner bootstrap payload and call `set_plan_from_planning_complete(...)` once the user confirms.
 - Otherwise, present the proposal to the user verbatim (do not summarize it away).
 - If the user has feedback or questions, call `refine_plan(user_feedback)`. Repeat as needed.
 - When the user confirms, call `finalize_plan()`.
   This returns {solution, search_capabilities, keynote}.
 
 ### Phase 4: Execute
-- Call `execute_plan()` to get manual worker bootstrap payload.
-- Run worker turns with the client LLM using:
-  - system message: `worker_system_prompt`
-  - first user message: `worker_initial_input`
-- Allow the client LLM to call execution tools (`create_index`, `create_and_attach_pipeline`,
-  `create_bedrock_embedding_model`, `create_local_pretrained_model`,
-  `apply_capability_driven_verification`, `launch_search_ui`, `set_search_ui_suggestions`) until done.
-- Commit the final worker response via `set_execution_from_execution_report(worker_response, execution_context)`.
-- If execution fails, the user can fix the issue (e.g., restart Docker) and call `retry_execution()` for a resume bootstrap payload.
+- Call `execute_plan()` to run index/model/pipeline/UI setup.
+- If `execute_plan()` returns manual execution bootstrap payload, follow it and then commit the final worker response via `set_execution_from_execution_report(worker_response, execution_context)`.
+- If execution fails, the user can fix the issue (e.g., restart Docker) and call `retry_execution()`.
 
 ### Post-Execution
-- After successful `set_execution_from_execution_report(...)`, explicitly tell the user
+- After successful execution completion, explicitly tell the user
   how to access the UI using the returned `ui_access` URLs.
 - `cleanup()` removes test/verification documents when the user explicitly asks.
 
@@ -157,7 +148,7 @@ Use the opensearch-orchestrator MCP tools to guide the user from requirements to
 - If manual planning is required (`sampling/createMessage` unavailable), generate the plan with the
   client LLM using the provided planner prompt/input and persist it with
   `set_plan_from_planning_complete(...)` before execution.
-- Use `talk_to_client_llm(...)` as the general client-LLM bridge tool when direct sampling orchestration is needed.
+- When a tool returns manual bootstrap payload fields, follow that payload instead of inventing alternate orchestration steps.
 - Show the planner's proposal text to the user verbatim; do not summarize it away.
 - For preference questions, ask one question per turn and use user-input UI fixed options, not free-text.
 - Do not ask redundant clarification questions for items already inferred from the sample data.
@@ -281,6 +272,12 @@ def _resolve_sample_source_defaults(
         resolved_sample_doc_json = str(
             getattr(state, "sample_doc_json", "") or ""
         ).strip()
+    # it's safe only if a user stays in the same MCP session and
+    # load_sample already populated _engine.state.source_local_file.
+    # When it can still fail:
+    # - New/reset session (state lost).
+    # - Source type was paste (no file path).
+    # - source_local_file is present but not readable at execution time.
     if not resolved_source_local_file:
         resolved_source_local_file = str(
             getattr(state, "source_local_file", "") or ""
@@ -584,6 +581,22 @@ def _build_manual_llm_payload(
 
 
 def _build_worker_bootstrap_payload(execution_context: str) -> dict[str, object]:
+    """Build bootstrap prompts for manual client-LLM execution fallback.
+
+    MCP client-mode usage flow:
+    1. Call `load_sample(...)` (include localhost auth args when source_type is localhost_index),
+       then `set_preferences(...)`, then `start_planning()`.
+    2. If `start_planning()` returns `manual_planning_required=true`, run planner turns
+       in the client LLM using:
+       - system message: `manual_planner_system_prompt`
+       - first user message: `manual_planner_initial_input`
+       - follow-up user feedback turns until the user confirms the plan
+    3. Commit the confirmed plan via
+       `set_plan_from_planning_complete(planner_response)`, where
+       `planner_response` includes:
+       `<planning_complete><solution>...</solution><search_capabilities>...</search_capabilities><keynote>...</keynote></planning_complete>`
+    4. Continue with `execute_plan()` (and `retry_execution()` if needed).
+    """
     worker_context = str(execution_context or "").strip()
     return {
         "manual_execution_required": True,
@@ -1046,19 +1059,30 @@ def create_index(
 @mcp.tool()
 def create_and_attach_pipeline(
     pipeline_name: str,
-    pipeline_body: dict,
-    index_name: str,
+    pipeline_body: dict | None = None,
+    index_name: str = "",
     pipeline_type: str = "ingest",
     replace_if_exists: bool = True,
     is_hybrid_search: bool = False,
     hybrid_weights: list[float] | None = None,
+    body: dict | None = None,
 ) -> str:
     """Create and attach ingest/search pipelines for MCP manual execution mode."""
+    resolved_pipeline_body = pipeline_body if pipeline_body is not None else body
+    if resolved_pipeline_body is None:
+        resolved_pipeline_body = {}
+    if not isinstance(resolved_pipeline_body, dict):
+        return "Error: pipeline_body must be a JSON object."
+
+    resolved_index_name = str(index_name or "").strip()
+    if not resolved_index_name:
+        return "Error: index_name is required."
+
     with _temporary_execution_auth_env():
         return create_and_attach_pipeline_impl(
             pipeline_name=pipeline_name,
-            pipeline_body=pipeline_body,
-            index_name=index_name,
+            pipeline_body=resolved_pipeline_body,
+            index_name=resolved_index_name,
             pipeline_type=pipeline_type,
             replace_if_exists=replace_if_exists,
             is_hybrid_search=is_hybrid_search,
@@ -1113,6 +1137,7 @@ async def apply_capability_driven_verification(
             source_index_name=resolved_source_index_name,
             existing_verification_doc_ids=existing_verification_doc_ids,
         )
+    # write semantic query
     return await _rewrite_semantic_suggestion_entries_with_client_llm(result=result, ctx=ctx)
 
 

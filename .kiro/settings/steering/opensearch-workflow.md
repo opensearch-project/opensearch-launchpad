@@ -72,31 +72,21 @@ Follow these phases in order using its tools:
 
 ### Phase 3: Plan
 - Call `start_planning()` to get the initial architecture proposal.
-- If `start_planning()` returns `manual_planning_required=true`, use
-  `manual_planner_system_prompt` + `manual_planner_initial_input` to run planner turns with the client LLM.
+- If `start_planning()` returns `manual_planning_required=true`, follow the returned planner bootstrap payload and call `set_plan_from_planning_complete(planner_response)` after user confirmation.
 - Present the proposal to the user.
-- If the user has feedback, refine the proposal (with tools when available, otherwise directly with the client LLM) and repeat.
+- If the user has feedback or questions, call `refine_plan(user_feedback)`. Repeat as needed.
 - When the user confirms:
   - tool-driven path: call `finalize_plan()` and use {solution, search_capabilities, keynote}
   - manual path: call `set_plan_from_planning_complete(planner_response)` with the finalized planner output
 
 ### Phase 4: Execute
-- Call `execute_plan()` to get manual worker bootstrap payload:
-  - `worker_system_prompt`
-  - `worker_initial_input`
-  - `execution_context`
-- Run worker turns with the client LLM and execution tools:
-  `create_index`, `create_and_attach_pipeline`, `create_bedrock_embedding_model`,
-  `create_local_pretrained_model`, `apply_capability_driven_verification`,
-  `launch_search_ui`, `set_search_ui_suggestions`.
-- After the worker completes, call
-  `set_execution_from_execution_report(worker_response, execution_context)`
-  to persist normalized execution state.
+- Call `execute_plan()` to run index/model/pipeline/UI setup.
+- If `execute_plan()` returns manual execution bootstrap payload, follow it and then call `set_execution_from_execution_report(worker_response, execution_context)` to persist normalized execution state.
 - If execution fails, the user can fix the issue (e.g., restart Docker) and call
-  `retry_execution()` to get a resume bootstrap payload.
+  `retry_execution()`.
 
 ### Post-Execution
-- After successful `set_execution_from_execution_report(...)`, explicitly tell the user
+- After successful execution completion, explicitly tell the user
   how to access the UI using the returned `ui_access` URLs.
 - `cleanup()` removes test documents when the user explicitly asks.
 
@@ -105,7 +95,6 @@ Follow these phases in order using its tools:
 - Never skip Phase 1. A sample document is mandatory before planning.
 - Prefer planner tools for plan generation.
 - If `manual_planning_required=true`, use the returned planner prompt/input and persist via `set_plan_from_planning_complete(...)`.
-- Use `talk_to_client_llm(system_prompt, user_prompt, ...)` as the general client-LLM bridge tool when needed.
 - Show the planner's proposal text to the user verbatim; do not summarize it away.
 - For preference questions, ask one question per turn and use user-input UI fixed options. Accept either a number or free-text answer.
 - Do not ask redundant clarification questions for items already inferred from the sample data.

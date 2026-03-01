@@ -679,7 +679,24 @@ def build_worker_initial_input(
     resume_step: str = "",
     previous_steps: dict[str, str] | None = None,
 ) -> str:
-    """Build the worker user-input prompt from finalized context."""
+    """
+    Build the worker user-input prompt from finalized context.
+    This is shared by server-side worker execution and MCP manual execution mode.
+    In MCP mode, mcp_server builds `worker_initial_input` from this for client-LLM worker turns.
+
+    Args:
+        execution_context: The finalized execution context.
+        resume_mode: Whether to resume from a failed step.
+        resume_step: The step to resume from.
+        previous_steps: The previous steps.
+
+    Returns:
+        The worker user-input prompt.
+
+    Example:
+        >>> build_worker_initial_input("Here is the approved plan:...")
+        "Here is the approved plan:\n...\nPlease implement this plan.\n..."
+    """
     requires_hybrid_search_pipeline, hybrid_weights, hybrid_profile = _resolve_hybrid_search_pipeline_weights(
         execution_context
     )
