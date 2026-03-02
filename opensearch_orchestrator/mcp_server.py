@@ -52,6 +52,7 @@ from opensearch_orchestrator.scripts.tools import (
     submit_sample_doc_from_url,
     get_sample_docs_for_verification,
     read_knowledge_base,
+    read_agentic_search_guide,
     read_dense_vector_models,
     read_sparse_vector_models,
     search_opensearch_org,
@@ -62,7 +63,10 @@ from opensearch_orchestrator.scripts.opensearch_ops_tools import (
     create_index as create_index_impl,
     create_and_attach_pipeline as create_and_attach_pipeline_impl,
     create_bedrock_embedding_model as create_bedrock_embedding_model_impl,
+    create_bedrock_agentic_model_with_creds as create_bedrock_agentic_model_with_creds_impl,
     create_local_pretrained_model as create_local_pretrained_model_impl,
+    create_agentic_search_flow_agent as create_agentic_search_flow_agent_impl,
+    create_agentic_search_pipeline as create_agentic_search_pipeline_impl,
     index_doc as index_doc_impl,
     index_verification_docs as index_verification_docs_impl,
     delete_doc as delete_doc_impl,
@@ -1346,6 +1350,81 @@ def create_local_pretrained_model(model_name: str) -> str:
 
 
 @mcp.tool()
+def create_bedrock_agentic_model_with_creds(
+    access_key: str,
+    secret_key: str,
+    region: str,
+    session_token: str,
+    model_name: str,
+) -> str:
+    """Create a Bedrock agentic model with explicit AWS credentials.
+    
+    Args:
+        access_key: AWS access key ID
+        secret_key: AWS secret access key
+        region: AWS region (e.g., us-east-1)
+        session_token: AWS session token
+        model_name: Name for the model in OpenSearch
+    
+    Returns:
+        str: Success or error message
+    """
+    with _temporary_execution_auth_env():
+        return create_bedrock_agentic_model_with_creds_impl(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=region,
+            session_token=session_token,
+            model_name=model_name,
+        )
+
+
+@mcp.tool()
+def create_agentic_search_flow_agent(agent_name: str, model_id: str) -> str:
+    """Create an agentic search flow agent with IndexMappingTool and QueryPlanningTool.
+    
+    Args:
+        agent_name: Name for the agent
+        model_id: OpenSearch model ID (from create_bedrock_agentic_model_with_creds)
+    
+    Returns:
+        str: Agent ID or error message
+    """
+    with _temporary_execution_auth_env():
+        return create_agentic_search_flow_agent_impl(
+            agent_name=agent_name,
+            model_id=model_id,
+        )
+
+
+@mcp.tool()
+def create_agentic_search_pipeline(
+    pipeline_name: str,
+    agent_id: str,
+    index_name: str,
+    replace_if_exists: bool = True,
+) -> str:
+    """Create an agentic search pipeline and attach it to an index.
+    
+    Args:
+        pipeline_name: Name for the search pipeline
+        agent_id: Agent ID (from create_agentic_search_flow_agent)
+        index_name: Index to attach the pipeline to
+        replace_if_exists: Whether to replace existing pipeline
+    
+    Returns:
+        str: Success or error message
+    """
+    with _temporary_execution_auth_env():
+        return create_agentic_search_pipeline_impl(
+            pipeline_name=pipeline_name,
+            agent_id=agent_id,
+            index_name=index_name,
+            replace_if_exists=replace_if_exists,
+        )
+
+
+@mcp.tool()
 async def apply_capability_driven_verification(
     worker_output: str,
     index_name: str = "",
@@ -1412,6 +1491,7 @@ def cleanup() -> str:
 
 # Expose minimal knowledge tools by default for MCP manual planning/execution flows.
 mcp.tool()(read_knowledge_base)
+mcp.tool()(read_agentic_search_guide)
 mcp.tool()(read_dense_vector_models)
 mcp.tool()(read_sparse_vector_models)
 mcp.tool()(search_opensearch_org)
