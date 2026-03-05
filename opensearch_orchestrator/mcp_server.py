@@ -78,6 +78,7 @@ from opensearch_orchestrator.scripts.opensearch_ops_tools import (
     set_search_ui_suggestions as set_search_ui_suggestions_impl,
     RUNTIME_MODE_ENV,
     RUNTIME_MODE_MCP,
+    set_search_relevance_scores as set_search_relevance_scores_impl,
 )
 from opensearch_orchestrator.worker import (
     SYSTEM_PROMPT as WORKER_SYSTEM_PROMPT,
@@ -1458,7 +1459,33 @@ async def apply_capability_driven_verification(
             existing_verification_doc_ids=existing_verification_doc_ids,
         )
     # write semantic query
-    return await _rewrite_semantic_suggestion_entries_with_client_llm(result=result, ctx=ctx)
+    result = await _rewrite_semantic_suggestion_entries_with_client_llm(result=result, ctx=ctx)
+    
+    # Automatically evaluate auto-generated suggestions if context is available
+    if ctx is not None and index_name:
+        try:
+            eval_result = await search_relevance_evaluation(
+                ctx=ctx,
+                index_name=index_name,
+                queries="",  # Empty = use auto-generated suggestions
+                size=20,
+            )
+            # Add evaluation info to result
+            if "error" not in eval_result:
+                result["auto_evaluation"] = {
+                    "queries": eval_result.get("queries", ""),
+                    "queries_evaluated": eval_result.get("queries_evaluated", 0),
+                    "total_scores_stored": eval_result.get("total_scores_stored", 0),
+                    "message": eval_result.get("message", ""),
+                }
+        except Exception as e:
+            # Don't fail the whole operation if evaluation fails
+            result["auto_evaluation"] = {
+                "error": f"Auto-evaluation failed: {str(e)}",
+                "note": "Suggestions were created but not evaluated. You can manually call search_relevance_evaluation.",
+            }
+    
+    return result
 
 
 @mcp.tool()
@@ -1497,6 +1524,160 @@ mcp.tool()(read_sparse_vector_models)
 mcp.tool()(search_opensearch_org)
 
 
+@mcp.tool()
+async def search_relevance_evaluation(
+    ctx: Context,
+    index_name: str,
+    queries: str = "",
+    size: int = 20,
+    evaluation_criteria: str = "Evaluate if the search results are relevant to the query based on semantic meaning and context.",
+) -> dict:
+    """Evaluate search relevance for queries using Kiro's LLM.
+
+    This tool evaluates search results and stores relevance scores that appear
+    as color-coded badges in the UI (green=relevant, red=not relevant).
+
+    Args:
+        ctx: MCP context (automatically provided)
+        index_name: The OpenSearch index to search against.
+        queries: Search queries to evaluate (comma-separated).
+                 If empty, automatically uses suggestions from the UI.
+                 Examples: "space opera" or "comedy, drama, action"
+        size: Number of results to evaluate per query (default: 20).
+        evaluation_criteria: Criteria for determining relevance (optional).
+
+    Returns:
+        dict with evaluation results and stored relevance scores.
+        
+    Examples:
+        # Use auto-generated suggestions (empty queries)
+        search_relevance_evaluation(ctx, "imdb_movies")
+        
+        # Evaluate single query
+        search_relevance_evaluation(ctx, "imdb_movies", "space opera")
+        
+        # Evaluate multiple queries
+        search_relevance_evaluation(ctx, "imdb_movies", "comedy, drama, action")
+    """
+    import json
+    from opensearch_orchestrator.scripts.opensearch_ops_tools import (
+        _search_ui_search,
+        _search_ui_suggestions,
+        _evaluate_relevance_with_llm,
+    )
+
+    if not index_name:
+        return {"error": "index_name is required"}
+
+    # Determine query source
+    query_list = []
+    query_source = ""
+    
+    if not queries or not queries.strip():
+        # No queries provided - use auto-generated suggestions from UI
+        suggestions_list, _ = _search_ui_suggestions(index_name, max_count=10)
+        if not suggestions_list:
+            return {
+                "error": "No auto-generated suggestions found and no queries provided. Make sure the index has documents or provide explicit queries.",
+                "index_name": index_name,
+            }
+        query_list = [q.strip() for q in suggestions_list if q.strip()]
+        query_source = "auto_suggestions"
+        # Populate the queries parameter with what we're actually evaluating
+        queries = ", ".join(query_list)
+    else:
+        # Parse explicit queries (single or comma-separated)
+        query_list = [q.strip() for q in queries.split(",") if q.strip()]
+        if not query_list:
+            return {"error": "No valid queries provided"}
+        query_source = "explicit"
+
+    evaluation_results = []
+    all_relevance_scores = {}
+
+    for query in query_list:
+        # Execute search
+        search_result = _search_ui_search(
+            index_name=index_name,
+            query_text=query,
+            size=size,
+            debug=True,
+        )
+
+        if search_result.get("error"):
+            evaluation_results.append({
+                "query": query,
+                "error": search_result["error"],
+                "results": [],
+            })
+            continue
+
+        hits = search_result.get("hits", [])
+        evaluated_hits = []
+
+        # Evaluate each result using Kiro's LLM
+        for hit in hits:
+            score = float(hit.get("score", 0))
+            preview = str(hit.get("preview", "")).lower()
+            query_lower = query.lower()
+            doc_id = hit.get("id")
+            source = hit.get("source", {})
+
+            # Use LLM to evaluate relevance
+            is_relevant = await _evaluate_relevance_with_llm(
+                query=query,
+                doc_source=source,
+                ctx=ctx,
+            )
+            
+            # If LLM evaluation failed (-1), fall back to heuristic
+            if is_relevant == -1:
+                query_terms = query_lower.split()
+                terms_in_preview = sum(1 for term in query_terms if term in preview)
+                term_coverage = terms_in_preview / len(query_terms) if query_terms else 0
+                is_relevant = 1 if (score > 1.0 or term_coverage > 0.5) else 0
+
+            # Store with composite key (query::doc_id)
+            if doc_id:
+                composite_key = f"{query}::{doc_id}"
+                all_relevance_scores[composite_key] = is_relevant
+
+            evaluated_hits.append({
+                "id": doc_id,
+                "score": score,
+                "preview": hit.get("preview"),
+                "relevance_score": is_relevant,
+                "relevance_color": "green" if is_relevant == 1 else "red",
+            })
+
+        evaluation_results.append({
+            "query": query,
+            "capability": search_result.get("capability", ""),
+            "query_mode": search_result.get("query_mode", ""),
+            "total_results": len(evaluated_hits),
+            "relevant_count": sum(1 for h in evaluated_hits if h["relevance_score"] == 1),
+            "not_relevant_count": sum(1 for h in evaluated_hits if h["relevance_score"] == 0),
+            "results": evaluated_hits,
+        })
+
+    # Store all relevance scores
+    if all_relevance_scores:
+        set_search_relevance_scores_impl(index_name, json.dumps(all_relevance_scores))
+
+    return {
+        "index_name": index_name,
+        "queries": queries,  # Show what was actually evaluated
+        "query_source": query_source,
+        "evaluation_criteria": evaluation_criteria,
+        "queries_evaluated": len(query_list),
+        "evaluations": evaluation_results,
+        "total_scores_stored": len(all_relevance_scores),
+        "message": f"Evaluated {len(query_list)} queries and stored {len(all_relevance_scores)} relevance scores.",
+    }
+
+
+
+
 # -------------------------------------------------------------------------
 # MCP prompt (for Claude Desktop and generic MCP clients)
 # -------------------------------------------------------------------------
@@ -1529,6 +1710,8 @@ if _advanced_tools_enabled():
     mcp.tool()(delete_doc_impl)
     mcp.tool()(preview_cap_driven_verification_impl)
     mcp.tool()(cleanup_ui_server_impl)
+    mcp.tool()(set_search_relevance_scores_impl)
+
 
 
 def _flatten_exception_leaves(exc: BaseException) -> list[BaseException]:

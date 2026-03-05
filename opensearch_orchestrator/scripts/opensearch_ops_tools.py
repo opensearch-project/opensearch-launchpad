@@ -91,6 +91,8 @@ class _SearchUIRuntime:
         self.default_index: str = ""
         self.lock = threading.Lock()
         self.suggestion_meta_by_index: dict[str, list[dict[str, object]]] = {}
+        # Composite key relevance scores: {index_name: {"query::doc_id": relevance_score}}
+        self.relevance_scores: dict[str, dict[str, int]] = {}
 
 _search_ui = _SearchUIRuntime()
 
@@ -128,6 +130,7 @@ def _write_ui_state() -> None:
     state = {
         "default_index": _search_ui.default_index,
         "suggestion_meta_by_index": _search_ui.suggestion_meta_by_index,
+        "relevance_scores": _search_ui.relevance_scores,
     }
     try:
         _UI_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
@@ -148,6 +151,7 @@ def _maybe_reload_ui_state() -> None:
         state = json.loads(_UI_STATE_FILE.read_text(encoding="utf-8"))
         _search_ui.default_index = state.get("default_index", "")
         _search_ui.suggestion_meta_by_index = state.get("suggestion_meta_by_index", {})
+        _search_ui.relevance_scores = state.get("relevance_scores", {})
         _ui_state_mtime = mtime
     except (OSError, json.JSONDecodeError, ValueError):
         pass
@@ -4156,16 +4160,32 @@ def _search_ui_search(
             raise
 
     hits_out: list[dict] = []
+    relevance_map = _search_ui.relevance_scores.get(index_name, {})
     for hit in response.get("hits", {}).get("hits", []):
         source = hit.get("_source", {})
-        hits_out.append(
-            {
-                "id": hit.get("_id"),
-                "score": hit.get("_score"),
-                "preview": _search_ui_preview_text(source),
-                "source": source,
-            }
-        )
+        doc_id = hit.get("_id")
+        
+        # query-specific composite key (query::doc_id)
+        relevance_score = None
+        if query and doc_id:
+            composite_key = f"{query}::{doc_id}"
+            relevance_score = relevance_map.get(composite_key, None)
+        
+        # Build hit data
+        hit_data = {
+            "id": doc_id,
+            "score": hit.get("_score"),
+            "preview": _search_ui_preview_text(source),
+            "source": source,
+        }
+        
+        # Only add relevance indicators if we have an LLM-evaluated score
+        # Results without scores will have no color badge (blank)
+        if relevance_score is not None:
+            hit_data["relevance_score"] = relevance_score
+            hit_data["relevance_color"] = "green" if relevance_score == 1 else "red"
+        
+        hits_out.append(hit_data)
     return {
         "error": "",
         "hits": hits_out,
@@ -4195,6 +4215,73 @@ def _resolve_default_index(preferred_index: str = "") -> str:
     except Exception:
         pass
     return ""
+
+
+async def _evaluate_relevance_with_llm(
+    query: str,
+    doc_source: dict,
+    ctx: object,
+) -> int:
+    """Evaluate document relevance using Kiro's LLM via MCP sampling.
+    
+    Args:
+        query: The search query
+        doc_source: The document source fields
+        ctx: MCP Context object with session.create_message capability
+        
+    Returns:
+        1 if relevant, 0 if not relevant
+    """
+    try:
+        from mcp import types as mcp_types
+        
+        # Build document representation (exclude embedding fields)
+        doc_text = " | ".join([
+            f"{k}: {v}" 
+            for k, v in doc_source.items() 
+            if not k.endswith("_embedding") and v
+        ])
+        
+        eval_prompt = f"""Evaluate if this document is relevant to the search query.
+
+Query: {query}
+
+Document: {doc_text}
+
+Is this document relevant to the query? Consider:
+- Does the document content match the query intent?
+- Would a user searching for "{query}" find this document useful?
+
+Respond with only "1" (relevant) or "0" (not relevant)."""
+
+        # Use MCP sampling to call Kiro's LLM
+        result = await ctx.session.create_message(
+            messages=[
+                mcp_types.SamplingMessage(
+                    role="user",
+                    content=mcp_types.TextContent(type="text", text=eval_prompt),
+                )
+            ],
+            max_tokens=10,
+        )
+        
+        # Extract response text
+        response_text = ""
+        if isinstance(result.content, mcp_types.TextContent):
+            response_text = str(result.content.text or "")
+        elif isinstance(result.content, list):
+            for item in result.content:
+                if isinstance(item, mcp_types.TextContent):
+                    response_text = str(item.text or "")
+                    break
+        
+        # Parse response
+        response_text = response_text.strip()
+        return 1 if "1" in response_text else 0
+        
+    except Exception:
+        # Fallback to heuristic if LLM evaluation fails
+        return -1  # Signal to use heuristic fallback
 
 
 def _search_ui_public_url() -> str:
@@ -5652,9 +5739,46 @@ def set_search_ui_suggestions(index_name: str, suggestion_meta_json: str) -> str
         return f"Invalid suggestion_meta_json: {e}"
     if not isinstance(parsed, list):
         return "suggestion_meta_json must be a JSON array."
+    # Reload state before modifying to avoid overwriting concurrent changes
+    _maybe_reload_ui_state()
     _search_ui.suggestion_meta_by_index[target] = parsed
     _write_ui_state()
     return f"Set {len(parsed)} suggestions for index '{target}'."
+def set_search_relevance_scores(index_name: str, relevance_data_json: str) -> str:
+    """Set relevance scores for search results in the UI.
+
+    Args:
+        index_name: Target index name.
+        relevance_data_json: JSON object mapping composite keys "query::doc_id" to relevance_score (0 or 1).
+            Examples:
+            - Composite key format: {"action movies::doc1": 1, "action movies::doc2": 0}
+            The composite key format prevents score collisions when the same document
+            appears in multiple queries with different relevance.
+
+    Returns:
+        str: Success message or error.
+    """
+    target = (index_name or "").strip()
+    if not target:
+        return "index_name is required for set_search_relevance_scores."
+    try:
+        parsed = json.loads(relevance_data_json)
+    except (json.JSONDecodeError, TypeError) as e:
+        return f"Invalid relevance_data_json: {e}"
+    if not isinstance(parsed, dict):
+        return "relevance_data_json must be a JSON object."
+
+    # Validate scores are 0 or 1
+    for composite_key, score in parsed.items():
+        if score not in (0, 1):
+            return f"Invalid relevance score for '{composite_key}': {score}. Must be 0 or 1."
+
+    # Reload state before modifying to avoid overwriting concurrent changes
+    _maybe_reload_ui_state()
+    _search_ui.relevance_scores[target] = parsed
+    _write_ui_state()
+    return f"Set relevance scores for {len(parsed)} documents in index '{target}'."
+
 
 
 def delete_doc(index_name: str, doc_id: str) -> str:
