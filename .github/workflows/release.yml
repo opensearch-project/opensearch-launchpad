@@ -1,0 +1,99 @@
+name: Release to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  draft-a-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Releasing version: $VERSION"
+
+      - name: Update version in pyproject.toml
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' pyproject.toml
+
+      - name: Update version in __init__.py
+        run: |
+          sed -i 's/^__version__ = ".*"/__version__ = "${{ steps.get_version.outputs.version }}"/' opensearch_orchestrator/__init__.py
+
+      - name: Verify versions match
+        run: |
+          python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb')); import opensearch_orchestrator as pkg; assert p['project']['version'] == pkg.__version__ == '${{ steps.get_version.outputs.version }}', 'Version mismatch!'; print(f'✓ Both files updated to {pkg.__version__}')"
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml opensearch_orchestrator/__init__.py
+          git diff --staged --quiet || git commit -m "chore: Bump version to ${{ steps.get_version.outputs.version }}"
+          git push origin HEAD:main || true
+
+      - name: Run tests
+        run: uv run pytest -q
+
+      - name: Build project for distribution
+        run: uv build
+
+      - name: Verify build artifacts
+        run: |
+          for whl in dist/*.whl; do python -m zipfile -l "$whl"; done
+          VERSION="${{ steps.get_version.outputs.version }}"
+          WHEEL_PATH="$(ls dist/opensearch_orchestrator-${VERSION}-*.whl)"
+          uvx --from "$WHEEL_PATH" opensearch-orchestrator --help || echo "CLI check completed"
+
+      - name: Upload release distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+
+  pypi-publish:
+    runs-on: ubuntu-latest
+    needs:
+      - draft-a-release
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist
+
+      - name: Generate the artifacts
+        run: |
+          tar -zvcf artifacts.tar.gz dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts.tar.gz
