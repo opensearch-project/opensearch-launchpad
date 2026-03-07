@@ -15,6 +15,9 @@ function App() {
   const [usedSemantic, setUsedSemantic] = useState(false);
   const [autocompleteField, setAutocompleteField] = useState("");
   const [autocompleteOptions, setAutocompleteOptions] = useState([]);
+  const [backendType, setBackendType] = useState("");
+  const [backendEndpoint, setBackendEndpoint] = useState("");
+  const [backendConnected, setBackendConnected] = useState(false);
 
   const capabilityLabel = {
     exact: "Exact",
@@ -76,6 +79,9 @@ function App() {
     try {
       const res = await fetch("/api/config");
       const data = await res.json();
+      setBackendType(String(data.backend_type || "").trim());
+      setBackendEndpoint(String(data.endpoint || "").trim());
+      setBackendConnected(Boolean(data.connected));
       const defaultIndex = (data.default_index || "").trim();
       if (defaultIndex) {
         setIndexName(defaultIndex);
@@ -238,6 +244,17 @@ function App() {
         </div>
         <div className="divider"></div>
         <div className="title">Search Builder</div>
+        {backendType && (
+          <div className={`backend-badge ${backendType} ${backendConnected ? "connected" : "disconnected"}`}>
+            <span className="backend-dot"></span>
+            <span className="backend-label">
+              {backendType === "cloud" ? "AWS Cloud" : "Local"}
+            </span>
+            {backendEndpoint && (
+              <span className="backend-endpoint">{backendEndpoint}</span>
+            )}
+          </div>
+        )}
       </header>
 
       <section className="panel">

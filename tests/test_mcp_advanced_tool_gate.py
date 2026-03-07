@@ -27,6 +27,7 @@ def test_default_tool_surface_is_workflow_only() -> None:
     assert tool_names == {
         "apply_capability_driven_verification",
         "cleanup",
+        "connect_search_ui_to_endpoint",
         "create_and_attach_pipeline",
         "create_agentic_search_flow_agent",
         "create_agentic_search_pipeline",
@@ -34,6 +35,7 @@ def test_default_tool_surface_is_workflow_only() -> None:
         "create_bedrock_embedding_model",
         "create_index",
         "create_local_pretrained_model",
+        "disconnect_search_ui_from_endpoint",
         "execute_plan",
         "finalize_plan",
         "launch_search_ui",

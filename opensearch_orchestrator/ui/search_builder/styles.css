@@ -79,6 +79,73 @@ body {
   letter-spacing: 0.01em;
 }
 
+.backend-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.backend-badge.local.connected {
+  color: #1a5c2e;
+  background: #e0f5e8;
+  border-color: #b0e0c2;
+}
+
+.backend-badge.local.disconnected {
+  color: #7a3030;
+  background: #fde8e8;
+  border-color: #f0bfbf;
+}
+
+.backend-badge.cloud.connected {
+  color: #0d4b7a;
+  background: #dceeff;
+  border-color: #a7d4f7;
+}
+
+.backend-badge.cloud.disconnected {
+  color: #7a3030;
+  background: #fde8e8;
+  border-color: #f0bfbf;
+}
+
+.backend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.connected .backend-dot {
+  background: #22a94e;
+  box-shadow: 0 0 4px #22a94e88;
+}
+
+.disconnected .backend-dot {
+  background: #c0392b;
+  box-shadow: 0 0 4px #c0392b88;
+}
+
+.backend-label {
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.backend-endpoint {
+  color: inherit;
+  opacity: 0.7;
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .panel {
   margin-top: 14px;
   background: var(--panel);

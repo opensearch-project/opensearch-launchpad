@@ -91,6 +91,12 @@ class _SearchUIRuntime:
         self.default_index: str = ""
         self.lock = threading.Lock()
         self.suggestion_meta_by_index: dict[str, list[dict[str, object]]] = {}
+        self.endpoint_override_host: str = ""
+        self.endpoint_override_port: int = 0
+        self.endpoint_override_use_ssl: bool = True
+        self.endpoint_override_auth: tuple[str, str] | None = None
+        self.endpoint_override_aws_region: str = ""
+        self.endpoint_override_aws_service: str = ""
 
 _search_ui = _SearchUIRuntime()
 
@@ -125,10 +131,24 @@ _ui_last_active_epoch: float = 0.0
 
 def _write_ui_state() -> None:
     """Persist UI config so the standalone subprocess can pick it up."""
-    state = {
+    state: dict[str, object] = {
         "default_index": _search_ui.default_index,
         "suggestion_meta_by_index": _search_ui.suggestion_meta_by_index,
     }
+    # Persist endpoint override so the detached UI server subprocess can use it.
+    if _search_ui.endpoint_override_host:
+        state["endpoint_override"] = {
+            "host": _search_ui.endpoint_override_host,
+            "port": _search_ui.endpoint_override_port,
+            "use_ssl": _search_ui.endpoint_override_use_ssl,
+            "aws_region": _search_ui.endpoint_override_aws_region,
+            "aws_service": _search_ui.endpoint_override_aws_service,
+        }
+        if _search_ui.endpoint_override_auth is not None:
+            state["endpoint_override"]["username"] = _search_ui.endpoint_override_auth[0]
+            state["endpoint_override"]["password"] = _search_ui.endpoint_override_auth[1]
+    else:
+        state["endpoint_override"] = None
     try:
         _UI_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     except OSError:
@@ -148,6 +168,26 @@ def _maybe_reload_ui_state() -> None:
         state = json.loads(_UI_STATE_FILE.read_text(encoding="utf-8"))
         _search_ui.default_index = state.get("default_index", "")
         _search_ui.suggestion_meta_by_index = state.get("suggestion_meta_by_index", {})
+        # Restore endpoint override from persisted state.
+        override = state.get("endpoint_override")
+        if isinstance(override, dict) and override.get("host"):
+            _search_ui.endpoint_override_host = str(override.get("host", ""))
+            _search_ui.endpoint_override_port = int(override.get("port", 443))
+            _search_ui.endpoint_override_use_ssl = bool(override.get("use_ssl", True))
+            _search_ui.endpoint_override_aws_region = str(override.get("aws_region", ""))
+            _search_ui.endpoint_override_aws_service = str(override.get("aws_service", ""))
+            username = str(override.get("username", ""))
+            password = str(override.get("password", ""))
+            if username and password:
+                _search_ui.endpoint_override_auth = (username, password)
+            else:
+                _search_ui.endpoint_override_auth = None
+        else:
+            _search_ui.endpoint_override_host = ""
+            _search_ui.endpoint_override_port = 0
+            _search_ui.endpoint_override_auth = None
+            _search_ui.endpoint_override_aws_region = ""
+            _search_ui.endpoint_override_aws_service = ""
         _ui_state_mtime = mtime
     except (OSError, json.JSONDecodeError, ValueError):
         pass
@@ -630,12 +670,50 @@ def _can_connect(opensearch_client: OpenSearch) -> tuple[bool, bool]:
         return True, False
     except Exception as e:
         lowered = normalize_text(e).lower()
+        # AOSS (OpenSearch Serverless) returns 404 on GET / but is reachable.
+        # Fall back to cat.indices as a connectivity check.
+        if "404" in lowered or "notfounderror" in lowered:
+            try:
+                opensearch_client.cat.indices(format="json")
+                return True, False
+            except Exception:
+                pass
         auth_failure = any(token in lowered for token in _AUTH_FAILURE_TOKENS)
         return False, auth_failure
 
 
 def _is_local_host(host: str) -> bool:
     return host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+
+def _get_backend_info() -> dict[str, object]:
+    """Return connection metadata describing whether the backend is local or cloud."""
+    override_host = _search_ui.endpoint_override_host
+    if override_host:
+        host = override_host
+        port = _search_ui.endpoint_override_port or 443
+    else:
+        host = OPENSEARCH_HOST
+        port = OPENSEARCH_PORT
+    is_local = _is_local_host(host)
+    backend_type = "local" if is_local else "cloud"
+    endpoint_label = f"{host}:{port}" if is_local else host
+
+    connected = False
+    try:
+        client = _create_client()
+        ok, _ = _can_connect(client)
+        connected = ok
+    except Exception:
+        pass
+
+    return {
+        "backend_type": backend_type,
+        "endpoint": endpoint_label,
+        "host": host,
+        "port": port,
+        "connected": connected,
+    }
 
 
 def _docker_cli_candidate_paths() -> list[str]:
@@ -1063,6 +1141,49 @@ def _wait_for_cluster_after_start() -> OpenSearch:
 
 
 def _create_client() -> OpenSearch:
+    # If a runtime endpoint override is active, connect directly to it.
+    override_host = _search_ui.endpoint_override_host
+    if override_host:
+        override_port = _search_ui.endpoint_override_port or 443
+        override_ssl = _search_ui.endpoint_override_use_ssl
+        override_auth = _search_ui.endpoint_override_auth
+        aws_region = _search_ui.endpoint_override_aws_region
+        aws_service = _search_ui.endpoint_override_aws_service
+
+        kwargs: dict[str, object] = {
+            "hosts": [{"host": override_host, "port": override_port}],
+            "use_ssl": override_ssl,
+            "verify_certs": override_ssl,
+            "ssl_show_warn": False,
+        }
+
+        # Use SigV4 auth for AWS endpoints (AOSS or managed domains).
+        if aws_region and aws_service:
+            try:
+                import boto3
+                from opensearchpy import AWSV4SignerAuth, RequestsHttpConnection
+
+                session = boto3.Session()
+                credentials = session.get_credentials()
+                auth = AWSV4SignerAuth(credentials, aws_region, aws_service)
+                kwargs["http_auth"] = auth
+                kwargs["connection_class"] = RequestsHttpConnection
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to configure AWS SigV4 auth for {override_host}: {e}"
+                ) from e
+        elif override_auth is not None:
+            kwargs["http_auth"] = override_auth
+
+        client = OpenSearch(**kwargs)
+        ok, auth_fail = _can_connect(client)
+        if ok:
+            return client
+        raise RuntimeError(
+            f"Cannot connect to overridden endpoint {override_host}:{override_port}"
+            + (" (authentication failure)" if auth_fail else "")
+        )
+
     http_auth = _resolve_http_auth_from_env()
 
     secure_client = _build_client(use_ssl=True, http_auth=http_auth)
@@ -4393,6 +4514,7 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/health":
             status = _search_ui_status_snapshot()
+            backend = _get_backend_info()
             self._write_json(
                 {
                     "ok": True,
@@ -4404,12 +4526,21 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
                     "last_active_epoch": status.get("last_active_epoch", 0.0),
                     "idle_timeout_seconds": status.get("idle_timeout_seconds", SEARCH_UI_IDLE_TIMEOUT_SECONDS),
                     "auto_stop_in_seconds": status.get("auto_stop_in_seconds"),
+                    "backend_type": backend["backend_type"],
+                    "endpoint": backend["endpoint"],
+                    "connected": backend["connected"],
                 }
             )
             return
 
         if parsed.path == "/api/config":
-            self._write_json({"default_index": _search_ui.default_index})
+            backend = _get_backend_info()
+            self._write_json({
+                "default_index": _search_ui.default_index,
+                "backend_type": backend["backend_type"],
+                "endpoint": backend["endpoint"],
+                "connected": backend["connected"],
+            })
             return
 
         if parsed.path == "/api/suggestions":
@@ -5578,6 +5709,110 @@ def launch_search_ui(index_name: str = "") -> str:
         f"{action_line}\n"
         f"{status_line}\n"
         "No default index selected. Enter an index name in the UI to start searching."
+    )
+
+
+def connect_search_ui_to_endpoint(
+    endpoint: str,
+    port: int = 443,
+    use_ssl: bool = True,
+    username: str = "",
+    password: str = "",
+    aws_region: str = "",
+    aws_service: str = "",
+    index_name: str = "",
+) -> str:
+    """Switch the Search UI to query a different OpenSearch endpoint (e.g. AWS).
+
+    Args:
+        endpoint: OpenSearch host (e.g. 'search-my-domain.us-east-1.es.amazonaws.com').
+        port: Port number (default 443 for AWS).
+        use_ssl: Whether to use SSL/TLS (default True).
+        username: Optional master user for fine-grained access control.
+        password: Optional password for fine-grained access control.
+        aws_region: AWS region for SigV4 auth (e.g. 'us-east-1'). Required for AOSS/managed domains.
+        aws_service: AWS service name for SigV4 auth ('aoss' for serverless, 'es' for managed domains).
+                     Auto-detected from endpoint if not provided.
+        index_name: Optional default index to use in the UI.
+    """
+    endpoint = str(endpoint or "").strip()
+    if not endpoint:
+        return "Error: endpoint is required."
+
+    # Auto-detect aws_service from endpoint if region is provided but service is not.
+    if not aws_service and aws_region:
+        if ".aoss." in endpoint:
+            aws_service = "aoss"
+        elif ".es." in endpoint or ".aos." in endpoint:
+            aws_service = "es"
+
+    # Auto-detect region from endpoint if not provided.
+    if not aws_region and (".aoss." in endpoint or ".es." in endpoint or ".aos." in endpoint):
+        import re
+        region_match = re.search(r"\.([a-z]{2}-[a-z]+-\d+)\.", endpoint)
+        if region_match:
+            aws_region = region_match.group(1)
+            if not aws_service:
+                if ".aoss." in endpoint:
+                    aws_service = "aoss"
+                else:
+                    aws_service = "es"
+
+    _search_ui.endpoint_override_host = endpoint
+    _search_ui.endpoint_override_port = port
+    _search_ui.endpoint_override_use_ssl = use_ssl
+    _search_ui.endpoint_override_aws_region = aws_region
+    _search_ui.endpoint_override_aws_service = aws_service
+    if username and password:
+        _search_ui.endpoint_override_auth = (username, password)
+    else:
+        _search_ui.endpoint_override_auth = None
+
+    backend = _get_backend_info()
+    if not backend["connected"]:
+        # Roll back override on failure so local still works.
+        _search_ui.endpoint_override_host = ""
+        _search_ui.endpoint_override_port = 0
+        _search_ui.endpoint_override_auth = None
+        _search_ui.endpoint_override_aws_region = ""
+        _search_ui.endpoint_override_aws_service = ""
+        return (
+            f"Error: Could not connect to {endpoint}:{port}. "
+            "Verify the endpoint is active and credentials are correct. "
+            "Search UI remains connected to the previous endpoint."
+        )
+
+    if index_name:
+        _search_ui.default_index = index_name.strip()
+    _write_ui_state()
+
+    label = "AWS Cloud" if backend["backend_type"] == "cloud" else "Remote"
+    auth_mode = f"SigV4 ({aws_service}/{aws_region})" if aws_region else "basic auth" if username else "no auth"
+    lines = [
+        f"Search UI now connected to {label} endpoint: {endpoint}",
+        f"Backend type: {backend['backend_type']}",
+        f"Auth: {auth_mode}",
+        f"Connected: {backend['connected']}",
+    ]
+    if _search_ui.default_index:
+        lines.append(f"Default index: {_search_ui.default_index}")
+    lines.append("Refresh the Search UI in your browser to see the updated connection badge.")
+    return "\n".join(lines)
+
+
+def disconnect_search_ui_from_endpoint() -> str:
+    """Reset the Search UI back to the default local OpenSearch endpoint."""
+    _search_ui.endpoint_override_host = ""
+    _search_ui.endpoint_override_port = 0
+    _search_ui.endpoint_override_auth = None
+    _search_ui.endpoint_override_aws_region = ""
+    _search_ui.endpoint_override_aws_service = ""
+    _write_ui_state()
+    backend = _get_backend_info()
+    return (
+        f"Search UI reset to local endpoint: {backend['endpoint']}\n"
+        f"Connected: {backend['connected']}\n"
+        "Refresh the Search UI in your browser to see the updated connection badge."
     )
 
 

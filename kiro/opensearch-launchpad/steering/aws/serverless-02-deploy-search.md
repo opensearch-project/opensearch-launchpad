@@ -259,6 +259,21 @@ After index creation (all paths):
    - Dense Vector: use `neural` query with `model_id`
    - BM25: use standard `match` queries
 
+## Connect Search UI to AWS Endpoint
+
+After deployment is complete, switch the local Search Builder UI to query the AWS collection:
+
+```
+Call connect_search_ui_to_endpoint(
+  endpoint="<collection-endpoint>",
+  port=443,
+  use_ssl=true,
+  index_name="<index-name>"
+)
+```
+
+The UI header badge will change from "Local" to "AWS Cloud" with a green connection indicator. The user can search against the cloud deployment using the same browser UI.
+
 ## Provide Access Information
 
 Give the user:
@@ -266,6 +281,7 @@ Give the user:
 - Collection ARN
 - Dashboard URL (if applicable)
 - Sample search queries to test
+- Search Builder UI URL (already connected to AWS endpoint)
 
 ## State Output
 

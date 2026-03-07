@@ -76,6 +76,8 @@ from opensearch_orchestrator.opensearch_ops_tools import (
     launch_search_ui as launch_search_ui_impl,
     cleanup_ui_server as cleanup_ui_server_impl,
     set_search_ui_suggestions as set_search_ui_suggestions_impl,
+    connect_search_ui_to_endpoint as connect_search_ui_to_endpoint_impl,
+    disconnect_search_ui_from_endpoint as disconnect_search_ui_from_endpoint_impl,
     RUNTIME_MODE_ENV,
     RUNTIME_MODE_MCP,
 )
@@ -1475,6 +1477,50 @@ def set_search_ui_suggestions(index_name: str, suggestion_meta_json: str) -> str
         index_name=index_name,
         suggestion_meta_json=suggestion_meta_json,
     )
+
+
+@mcp.tool()
+def connect_search_ui_to_endpoint(
+    endpoint: str,
+    port: int = 443,
+    use_ssl: bool = True,
+    username: str = "",
+    password: str = "",
+    aws_region: str = "",
+    aws_service: str = "",
+    index_name: str = "",
+) -> str:
+    """Switch the Search UI to query an AWS OpenSearch endpoint instead of local.
+    Call after successful Phase 5 AWS deployment to point the Search UI at the cloud endpoint.
+
+    Args:
+        endpoint: OpenSearch host (e.g. 'search-my-domain.us-east-1.es.amazonaws.com').
+        port: Port number (default 443 for AWS).
+        use_ssl: Whether to use SSL/TLS (default True).
+        username: Optional master user for fine-grained access control.
+        password: Optional password for fine-grained access control.
+        aws_region: AWS region for SigV4 auth (e.g. 'us-east-1'). Required for AOSS.
+        aws_service: AWS service name ('aoss' for serverless, 'es' for managed). Auto-detected from endpoint.
+        index_name: Optional default index to use in the UI.
+    """
+    return connect_search_ui_to_endpoint_impl(
+        endpoint=endpoint,
+        port=port,
+        use_ssl=use_ssl,
+        username=username,
+        password=password,
+        aws_region=aws_region,
+        aws_service=aws_service,
+        index_name=index_name,
+    )
+
+
+@mcp.tool()
+def disconnect_search_ui_from_endpoint() -> str:
+    """Reset the Search UI back to the default local OpenSearch endpoint.
+    Use this to switch back from an AWS endpoint to local development.
+    """
+    return disconnect_search_ui_from_endpoint_impl()
 
 
 @mcp.tool()

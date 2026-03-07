@@ -130,6 +130,23 @@ Update `.opensearch-deploy-state.json`:
 - **For agentic search**: Proceed to `domain-03-agentic-setup.md`
 - **For all other strategies**: Deployment complete. Provide access information to user.
 
+### Connect Search UI to AWS Endpoint
+
+After deployment is complete, switch the local Search Builder UI to query the AWS domain:
+
+```
+Call connect_search_ui_to_endpoint(
+  endpoint="<domain-endpoint>",
+  port=443,
+  use_ssl=true,
+  username="<master-user>",
+  password="<master-password>",
+  index_name="<index-name>"
+)
+```
+
+The UI header badge will change from "Local" to "AWS Cloud" with a green connection indicator. The user can search against the cloud deployment using the same browser UI.
+
 ### Access Information (non-agentic)
 
 Give the user:
@@ -138,3 +155,4 @@ Give the user:
 - OpenSearch Dashboards URL
 - Master user credentials (securely)
 - Sample search queries
+- Search Builder UI URL (already connected to AWS endpoint)
