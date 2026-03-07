@@ -20,13 +20,13 @@ jobs:
       - name: Run tests
         run: uv run pytest -q
       - name: Verify version consistency
-        run: uv run python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb')); import opensearch_orchestrator as pkg; assert p['project']['version'] == pkg.__version__, f'mismatch {p[\"project\"][\"version\"]} vs {pkg.__version__}'; print('version OK:', pkg.__version__)"
+        run: uv run python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb')); import opensearch_launchpad as pkg; assert p['project']['version'] == pkg.__version__, f'mismatch {p[\"project\"][\"version\"]} vs {pkg.__version__}'; print('version OK:', pkg.__version__)"
       - name: Build and verify artifacts
         run: |
           uv build
           for whl in dist/*.whl; do python -m zipfile -l "$whl"; done
       - name: Verify entry point import
-        run: uv run python -c "import opensearch_orchestrator.mcp_server as m; print(hasattr(m, 'main'))"
+        run: uv run python -c "import opensearch_launchpad.mcp_server as m; print(hasattr(m, 'main'))"
 
   test-macos:
     name: Test on macOS

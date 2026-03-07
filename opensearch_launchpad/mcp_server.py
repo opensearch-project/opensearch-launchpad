@@ -38,13 +38,13 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX fallback
     fcntl = None
 
-from opensearch_orchestrator.orchestrator import create_transport_agnostic_engine
-from opensearch_orchestrator.planning_session import PlanningSession
-from opensearch_orchestrator.shared import Phase, get_last_worker_run_state
-from opensearch_orchestrator.solution_planning_assistant import (
+from opensearch_launchpad.orchestrator import create_transport_agnostic_engine
+from opensearch_launchpad.planning_session import PlanningSession
+from opensearch_launchpad.shared import Phase, get_last_worker_run_state
+from opensearch_launchpad.solution_planning_assistant import (
     SYSTEM_PROMPT as PLANNER_SYSTEM_PROMPT,
 )
-from opensearch_orchestrator.tools import (
+from opensearch_launchpad.tools import (
     BUILTIN_IMDB_SAMPLE_PATH,
     submit_sample_doc,
     submit_sample_doc_from_local_file,
@@ -57,7 +57,7 @@ from opensearch_orchestrator.tools import (
     read_sparse_vector_models,
     search_opensearch_org,
 )
-from opensearch_orchestrator.opensearch_ops_tools import (
+from opensearch_launchpad.opensearch_ops_tools import (
     SEARCH_UI_HOST,
     SEARCH_UI_PORT,
     create_index as create_index_impl,
@@ -80,7 +80,7 @@ from opensearch_orchestrator.opensearch_ops_tools import (
     RUNTIME_MODE_ENV,
     RUNTIME_MODE_MCP,
 )
-from opensearch_orchestrator.worker import (
+from opensearch_launchpad.worker import (
     SYSTEM_PROMPT as WORKER_SYSTEM_PROMPT,
     _RESUME_WORKER_MARKER,
     build_worker_initial_input,
@@ -261,7 +261,7 @@ _VALID_LOCALHOST_AUTH_MODES = {
 _MCP_STATE_PERSIST_ENV = "OPENSEARCH_MCP_PERSIST_STATE"
 _MCP_STATE_FILE_ENV = "OPENSEARCH_MCP_STATE_FILE"
 _DEFAULT_MCP_STATE_FILE = (
-    Path.home() / ".opensearch_orchestrator" / "mcp_state.json"
+    Path.home() / ".opensearch_launchpad" / "mcp_state.json"
 )
 _MCP_STATE_VERSION = 1
 _PERSISTED_STATE_FIELDS = (
@@ -1993,10 +1993,10 @@ def main() -> None:
             "This MCP server uses JSON-RPC over stdio and must be launched by an MCP client "
             "(Cursor/Claude Desktop/Inspector)."
         )
-        print("For an interactive local workflow, run: python opensearch_orchestrator/orchestrator.py")
+        print("For an interactive local workflow, run: python opensearch_launchpad/orchestrator.py")
         raise SystemExit(0)
     # IDE MCP integrations commonly run stdio servers as child processes (for this repo:
-    # clients like Cursor launches `uv run opensearch_orchestrator/mcp_server.py` from `.cursor/mcp.json`).
+    # clients like Cursor launches `uv run opensearch_launchpad/mcp_server.py` from `.cursor/mcp.json`).
     # Reconnect-like events (window reload/restart, MCP toggle, cancel/disconnect/re-init)
     # close and reopen the stdio pipe. When that pipe closes, this process should exit
     # cleanly; the client starts a new process for the new connection.

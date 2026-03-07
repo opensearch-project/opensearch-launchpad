@@ -37,26 +37,26 @@ Repository = "https://github.com/opensearch-project/opensearch-launchpad"
 Issues = "https://github.com/opensearch-project/opensearch-launchpad/issues"
 
 [project.scripts]
-opensearch-launchpad = "opensearch_orchestrator.mcp_server:main"
+opensearch-launchpad = "opensearch_launchpad.mcp_server:main"
 
 [tool.hatch.build]
 include = [
-    "opensearch_orchestrator/**/*.py",
-    "opensearch_orchestrator/knowledge/*.md",
-    "opensearch_orchestrator/sample_data/*",
-    "opensearch_orchestrator/ui/search_builder/*",
+    "opensearch_launchpad/**/*.py",
+    "opensearch_launchpad/knowledge/*.md",
+    "opensearch_launchpad/sample_data/*",
+    "opensearch_launchpad/ui/search_builder/*",
     "readme.md",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["opensearch_orchestrator"]
+packages = ["opensearch_launchpad"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "opensearch_orchestrator/**/*.py",
-    "opensearch_orchestrator/knowledge/*.md",
-    "opensearch_orchestrator/sample_data/*",
-    "opensearch_orchestrator/ui/search_builder/*",
+    "opensearch_launchpad/**/*.py",
+    "opensearch_launchpad/knowledge/*.md",
+    "opensearch_launchpad/sample_data/*",
+    "opensearch_launchpad/ui/search_builder/*",
     "tests/**/*.py",
     "readme.md",
     "pyproject.toml",

@@ -38,14 +38,14 @@ jobs:
         run: |
           pip install uv
           uv run pytest -q
-          uv run python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb')); import opensearch_orchestrator as pkg; print('pyproject=', p['project']['version'], 'package=', pkg.__version__)"
+          uv run python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb')); import opensearch_launchpad as pkg; print('pyproject=', p['project']['version'], 'package=', pkg.__version__)"
 
           uv build
           for whl in dist/*.whl; do python -m zipfile -l "$whl"; done
-          uv run python -c "import opensearch_orchestrator.mcp_server as m; print(hasattr(m, 'main'))"
+          uv run python -c "import opensearch_launchpad.mcp_server as m; print(hasattr(m, 'main'))"
 
           VERSION=`cat pyproject.toml | grep "version =" | grep -Eo "[0-9.]+"`
-          WHEEL_PATH="$(ls dist/opensearch_launchpad-${VERSION}-*.whl 2>/dev/null || ls dist/opensearch_orchestrator-${VERSION}-*.whl)"
+          WHEEL_PATH="$(ls dist/opensearch_launchpad-${VERSION}-*.whl 2>/dev/null || ls dist/opensearch_launchpad-${VERSION}-*.whl)"
           uvx --from "$WHEEL_PATH" opensearch-launchpad
 
           mkdir -p release-wheel

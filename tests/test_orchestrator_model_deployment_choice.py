@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.orchestrator as orchestrator
+import opensearch_launchpad.orchestrator as orchestrator
 
 _EXPECTED_MODEL_DEPLOYMENT_OPTIONS = [
     (

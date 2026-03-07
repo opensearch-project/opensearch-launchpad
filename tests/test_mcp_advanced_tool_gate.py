@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-import opensearch_orchestrator.mcp_server as mcp_server
+import opensearch_launchpad.mcp_server as mcp_server
 
 
 def test_advanced_tools_disabled_by_default(monkeypatch) -> None:

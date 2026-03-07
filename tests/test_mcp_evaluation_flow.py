@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.mcp_server as mcp_server
+import opensearch_launchpad.mcp_server as mcp_server
 
 
 class _DummyContext:

@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.orchestrator as orchestrator
+import opensearch_launchpad.orchestrator as orchestrator
 
 
 def test_system_prompt_includes_additional_requirements_defaults_section():

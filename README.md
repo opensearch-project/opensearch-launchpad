@@ -17,7 +17,7 @@ The `mcp.json` at the repo root runs `uvx opensearch-launchpad@latest` — no lo
 Start the interactive orchestrator in a terminal:
 
 ```bash
-python opensearch_orchestrator/orchestrator.py
+python opensearch_launchpad/orchestrator.py
 ```
 
 The orchestrator guides you through sample collection, requirements gathering, solution planning, and execution — all in one interactive session.
@@ -48,12 +48,12 @@ If installed via `pip`:
 opensearch-launchpad
 ```
 
-> This starts a stdio MCP server (JSON-RPC), not an interactive CLI. Launch it from an MCP client. For an interactive terminal session, use `python opensearch_orchestrator/orchestrator.py` instead.
+> This starts a stdio MCP server (JSON-RPC), not an interactive CLI. Launch it from an MCP client. For an interactive terminal session, use `python opensearch_launchpad/orchestrator.py` instead.
 
 ### Running locally (dev)
 
 ```bash
-uv run opensearch_orchestrator/mcp_server.py
+uv run opensearch_launchpad/mcp_server.py
 ```
 
 `uv` reads inline script metadata and auto-installs dependencies into a cached virtual environment.
@@ -92,7 +92,7 @@ pip install mcp opensearch-py
   "mcpServers": {
     "opensearch-launchpad": {
       "command": "python3",
-      "args": ["opensearch_orchestrator/mcp_server.py"],
+      "args": ["opensearch_launchpad/mcp_server.py"],
       "cwd": "/path/to/agent"
     }
   }
@@ -150,10 +150,10 @@ Local Docker auto-bootstrap uses `admin` and reads the password from `OPENSEARCH
 ```bash
 # 1) Bump version in both files to the same value, e.g. 0.10.1
 #    - pyproject.toml: [project].version
-#    - opensearch_orchestrator/__init__.py: __version__
+#    - opensearch_launchpad/__init__.py: __version__
 
 # Optional sanity check:
-python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb')); import opensearch_orchestrator as pkg; print('pyproject=', p['project']['version'], 'package=', pkg.__version__)"
+python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb')); import opensearch_launchpad as pkg; print('pyproject=', p['project']['version'], 'package=', pkg.__version__)"
 
 # 2) All tests must pass
 uv run pytest -q
@@ -161,11 +161,11 @@ uv run pytest -q
 # 3) Build and verify artifacts
 uv build
 for whl in dist/*.whl; do python -m zipfile -l "$whl"; done
-python -c "import opensearch_orchestrator.mcp_server as m; print(hasattr(m, 'main'))"
+python -c "import opensearch_launchpad.mcp_server as m; print(hasattr(m, 'main'))"
 
 # Smoke-test the wheel
 VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
-WHEEL_PATH="$(ls dist/opensearch_launchpad-${VERSION}-*.whl 2>/dev/null || ls dist/opensearch_orchestrator-${VERSION}-*.whl)"
+WHEEL_PATH="$(ls dist/opensearch_launchpad-${VERSION}-*.whl 2>/dev/null || ls dist/opensearch_launchpad-${VERSION}-*.whl)"
 uvx --from "$WHEEL_PATH" opensearch-launchpad
 
 # 4) Publish to PyPI

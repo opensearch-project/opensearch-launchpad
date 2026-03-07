@@ -7,7 +7,7 @@ from mcp import types as mcp_types
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.mcp_server as mcp_server
+import opensearch_launchpad.mcp_server as mcp_server
 
 
 class _DummyContext:
@@ -157,7 +157,7 @@ def test_set_execution_from_execution_report_updates_engine_phase(monkeypatch) -
 def test_create_index_uses_engine_sample_source_defaults(monkeypatch) -> None:
     class _State:
         sample_doc_json = '{"tconst":"tt0000001","primaryTitle":"Carmencita"}'
-        source_local_file = "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+        source_local_file = "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
         source_index_name = ""
 
     class _Engine:
@@ -186,7 +186,7 @@ def test_apply_capability_driven_verification_uses_engine_sample_source_defaults
 ) -> None:
     class _State:
         sample_doc_json = '{"tconst":"tt0000001","primaryTitle":"Carmencita"}'
-        source_local_file = "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+        source_local_file = "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
         source_index_name = ""
 
     class _Engine:
@@ -268,7 +268,7 @@ def test_mcp_state_persistence_round_trip(monkeypatch, tmp_path) -> None:
 
     class _State:
         sample_doc_json = '{"tconst":"tt0000001","primaryTitle":"Carmencita"}'
-        source_local_file = "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+        source_local_file = "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
         source_index_name = ""
         source_index_doc_count = 42
         inferred_text_search_required = True

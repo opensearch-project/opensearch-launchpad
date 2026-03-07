@@ -1,6 +1,6 @@
 from opensearchpy import OpenSearch
 
-from opensearch_orchestrator.shared import normalize_text, value_shape, text_richness_score
+from opensearch_launchpad.shared import normalize_text, value_shape, text_richness_score
 import getpass
 import json
 import os
@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from opensearch_orchestrator.tools import get_sample_docs_payload, normalize_ingest_source_field_hints
+from opensearch_launchpad.tools import get_sample_docs_payload, normalize_ingest_source_field_hints
 
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
@@ -122,7 +122,7 @@ else:
 _UI_RUNTIME_DIR = Path(tempfile.gettempdir()) / f"opensearch_search_ui_{_ui_owner_token}"
 _UI_LOCK_FILE = _UI_RUNTIME_DIR / _UI_LOCK_BASENAME
 _UI_SERVER_SCRIPT_NAME = "ui_server_standalone.py"
-_UI_SERVER_MODULE = "opensearch_orchestrator.ui_server_standalone"
+_UI_SERVER_MODULE = "opensearch_launchpad.ui_server_standalone"
 
 _ui_instance_id: str = ""
 _ui_idle_timeout_seconds: int = SEARCH_UI_IDLE_TIMEOUT_SECONDS

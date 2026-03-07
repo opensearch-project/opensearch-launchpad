@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.opensearch_ops_tools as tools
+import opensearch_launchpad.opensearch_ops_tools as tools
 
 
 class _FakeIndices:

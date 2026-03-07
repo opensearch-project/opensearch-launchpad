@@ -4,7 +4,7 @@ import builtins
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.shared as shared
+import opensearch_launchpad.shared as shared
 
 
 def _read_with_inputs(monkeypatch, values):
