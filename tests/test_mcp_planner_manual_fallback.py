@@ -1,6 +1,6 @@
 import asyncio
 
-import opensearch_orchestrator.mcp_server as mcp_server
+import opensearch_launchpad.mcp_server as mcp_server
 
 
 class _DummyContext:

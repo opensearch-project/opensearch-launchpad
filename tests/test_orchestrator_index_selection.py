@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.orchestrator as orchestrator
+import opensearch_launchpad.orchestrator as orchestrator
 
 
 def test_extract_localhost_index_options_from_error():
@@ -69,7 +69,7 @@ def test_detect_pasted_sample_content_rejects_plain_text():
 
 def test_augment_worker_context_with_source_and_sample_from_builtin_file():
     state = orchestrator.SessionState(
-        source_local_file="opensearch_orchestrator/sample_data/imdb.title.basics.tsv",
+        source_local_file="opensearch_launchpad/sample_data/imdb.title.basics.tsv",
         sample_doc_json=json.dumps({"sample_doc": {"primaryTitle": "Carmencita"}}, ensure_ascii=False),
     )
     context = "**SOLUTION**:\n- Retrieval Method: Hybrid Search (BM25 + Dense Vector)"
@@ -77,13 +77,13 @@ def test_augment_worker_context_with_source_and_sample_from_builtin_file():
     augmented = orchestrator._augment_worker_context_with_source(state, context)
 
     assert orchestrator._SYSTEM_SOURCE_CONTEXT_HEADER in augmented
-    assert "Source: opensearch_orchestrator/sample_data/imdb.title.basics.tsv" in augmented
+    assert "Source: opensearch_launchpad/sample_data/imdb.title.basics.tsv" in augmented
     assert 'Sample document: {"primaryTitle": "Carmencita"}' in augmented
 
 
 def test_augment_worker_context_with_source_is_idempotent():
     state = orchestrator.SessionState(
-        source_local_file="opensearch_orchestrator/sample_data/imdb.title.basics.tsv",
+        source_local_file="opensearch_launchpad/sample_data/imdb.title.basics.tsv",
         sample_doc_json=json.dumps({"sample_doc": {"primaryTitle": "Carmencita"}}, ensure_ascii=False),
     )
     context = "**SOLUTION**:\n- Retrieval Method: Hybrid Search (BM25 + Dense Vector)"
@@ -110,7 +110,7 @@ def test_augment_worker_context_with_source_uses_localhost_index_when_file_missi
 
 def test_augment_worker_context_with_source_preserves_resume_marker():
     state = orchestrator.SessionState(
-        source_local_file="opensearch_orchestrator/sample_data/imdb.title.basics.tsv",
+        source_local_file="opensearch_launchpad/sample_data/imdb.title.basics.tsv",
         sample_doc_json=json.dumps({"sample_doc": {"primaryTitle": "Carmencita"}}, ensure_ascii=False),
     )
     context = (

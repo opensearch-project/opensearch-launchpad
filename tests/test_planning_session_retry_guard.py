@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.planning_session as planning_session
+import opensearch_launchpad.planning_session as planning_session
 
 
 class _StubAgent:

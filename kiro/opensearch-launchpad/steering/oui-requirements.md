@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: 'opensearch_orchestrator/ui/**'
+fileMatchPattern: 'opensearch_launchpad/ui/**'
 ---
 
 # OUI Requirements Document

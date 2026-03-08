@@ -1,6 +1,6 @@
 import anyio
 
-from opensearch_orchestrator.mcp_server import _is_expected_stdio_disconnect
+from opensearch_launchpad.mcp_server import _is_expected_stdio_disconnect
 
 
 def test_expected_disconnect_group_returns_true() -> None:

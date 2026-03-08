@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.worker as worker
+import opensearch_launchpad.worker as worker
 
 
 def test_retry_once_after_exception_when_recovery_succeeds(monkeypatch):

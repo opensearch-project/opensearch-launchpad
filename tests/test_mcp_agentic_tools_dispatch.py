@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.mcp_server as mcp_server
+import opensearch_launchpad.mcp_server as mcp_server
 
 
 def test_create_bedrock_agentic_model_with_creds_delegates_to_impl(monkeypatch) -> None:

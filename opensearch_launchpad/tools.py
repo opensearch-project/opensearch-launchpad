@@ -11,7 +11,7 @@ from html import unescape
 from urllib.parse import parse_qs, quote_plus, urlparse
 from urllib.request import Request, urlopen
 
-from opensearch_orchestrator.shared import (
+from opensearch_launchpad.shared import (
     SUPPORTED_SAMPLE_FILE_EXTENSION_REGEX,
     SUPPORTED_SAMPLE_FILE_FORMATS_COMMA,
     text_richness_score,
@@ -27,14 +27,14 @@ _INLINE_RELATIVE_PATH_WITH_SUPPORTED_EXTENSION_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
-BUILTIN_IMDB_SAMPLE_PATH = "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+BUILTIN_IMDB_SAMPLE_PATH = "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
 _LEGACY_BUILTIN_IMDB_SAMPLE_PATH = "scripts/sample_data/imdb.title.basics.tsv"
 _KNOWLEDGE_PACKAGE_ROOT = ("knowledge",)
 _SAMPLE_DATA_PACKAGE_ROOT = ("sample_data",)
 
 
 def _read_packaged_text_file(*parts: str) -> str:
-    return importlib_resources.files("opensearch_orchestrator").joinpath(*parts).read_text(
+    return importlib_resources.files("opensearch_launchpad").joinpath(*parts).read_text(
         encoding="utf-8"
     )
 
@@ -50,7 +50,7 @@ def _resolve_builtin_imdb_sample_file() -> Path:
     if candidate.exists():
         return candidate
     # Fallback for unusual import loaders where __file__ path differs.
-    traversable = importlib_resources.files("opensearch_orchestrator").joinpath(
+    traversable = importlib_resources.files("opensearch_launchpad").joinpath(
         *_SAMPLE_DATA_PACKAGE_ROOT, "imdb.title.basics.tsv"
     )
     return Path(str(traversable))

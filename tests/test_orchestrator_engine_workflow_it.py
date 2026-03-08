@@ -5,9 +5,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.orchestrator as orchestrator
-import opensearch_orchestrator.planning_session as planning_session
-from opensearch_orchestrator.shared import Phase
+import opensearch_launchpad.orchestrator as orchestrator
+import opensearch_launchpad.planning_session as planning_session
+from opensearch_launchpad.shared import Phase
 
 
 class _SequencePlanner:

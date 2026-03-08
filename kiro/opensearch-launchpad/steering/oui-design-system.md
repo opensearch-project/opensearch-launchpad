@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: 'opensearch_orchestrator/ui/**'
+fileMatchPattern: 'opensearch_launchpad/ui/**'
 ---
 # OpenSearch UI (OUI) Design System — Steering Document
 
@@ -420,7 +420,7 @@ All spacing uses a 4px base unit.
 
 ## Standalone UI Notes
 
-The search builder UI (`opensearch_orchestrator/ui/search_builder/`) is a plain HTML + React (UMD) app with no build step. It uses raw CSS custom properties in `styles.css` rather than Tailwind utilities. When working on this UI:
+The search builder UI (`opensearch_launchpad/ui/search_builder/`) is a plain HTML + React (UMD) app with no build step. It uses raw CSS custom properties in `styles.css` rather than Tailwind utilities. When working on this UI:
 
 - Define OUI tokens as CSS custom properties in `:root` inside `styles.css`
 - Reference them via `var(--token-name)` in all style rules

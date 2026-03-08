@@ -15,7 +15,7 @@ The system is delivered as a **Kiro Power** (`POWER.md` + `mcp.json`) backed by 
 | Mode | How it runs |
 |------|-------------|
 | **Kiro Power (published)** | `mcp.json` runs `uvx opensearch-launchpad@latest` |
-| **Local dev** | `.kiro/settings/mcp.json` runs `uv run opensearch_orchestrator/mcp_server.py` |
+| **Local dev** | `.kiro/settings/mcp.json` runs `uv run opensearch_launchpad/mcp_server.py` |
 
 The Kiro AI reads `POWER.md` for workflow instructions and calls MCP tools exposed by `mcp_server.py` over stdio.
 
@@ -106,9 +106,9 @@ The workflow is driven by the Kiro AI reading `POWER.md`. Each phase calls speci
 
 | Path | Purpose |
 |------|---------|
-| `opensearch_orchestrator/knowledge/` | Markdown guides read by the planner (semantic search, dense/sparse vector models, agentic search) |
-| `opensearch_orchestrator/sample_data/` | Built-in IMDB dataset (`imdb.title.basics.tsv`) |
-| `opensearch_orchestrator/ui/search_builder/` | Static React frontend served by the local UI server |
+| `opensearch_launchpad/knowledge/` | Markdown guides read by the planner (semantic search, dense/sparse vector models, agentic search) |
+| `opensearch_launchpad/sample_data/` | Built-in IMDB dataset (`imdb.title.basics.tsv`) |
+| `opensearch_launchpad/ui/search_builder/` | Static React frontend served by the local UI server |
 | `steering/` | AWS deployment step-by-step instructions (serverless and domain tracks) |
 | `local/` | Local-only Strands agents for development and testing |
 

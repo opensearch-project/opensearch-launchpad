@@ -12,9 +12,9 @@ if __package__ in {None, ""}:
     if _SCRIPT_EXECUTION_PROJECT_ROOT not in sys.path:
         sys.path.insert(0, _SCRIPT_EXECUTION_PROJECT_ROOT)
 
-from opensearch_orchestrator.handler import ThinkingCallbackHandler
-from opensearch_orchestrator.opensearch_ops_tools import preview_cap_driven_verification
-from opensearch_orchestrator.tools import (
+from opensearch_launchpad.handler import ThinkingCallbackHandler
+from opensearch_launchpad.opensearch_ops_tools import preview_cap_driven_verification
+from opensearch_launchpad.tools import (
     BUILTIN_IMDB_SAMPLE_PATH,
     read_knowledge_base,
     read_dense_vector_models,
@@ -22,13 +22,13 @@ from opensearch_orchestrator.tools import (
     read_agentic_search_guide,
     search_opensearch_org,
 )
-from opensearch_orchestrator.shared import (
+from opensearch_launchpad.shared import (
     SUPPORTED_SAMPLE_FILE_EXTENSION_REGEX,
     read_multiline_input,
     looks_like_new_request,
     looks_like_execution_intent,
 )
-from opensearch_orchestrator.worker import SAMPLE_CONTEXT
+from opensearch_launchpad.worker import SAMPLE_CONTEXT
 
 # -------------------------------------------------------------------------
 # System Prompt

@@ -1,6 +1,6 @@
 import os
 
-import opensearch_orchestrator.mcp_server as mcp_server
+import opensearch_launchpad.mcp_server as mcp_server
 
 
 def test_mcp_load_sample_forwards_localhost_auth_args(monkeypatch) -> None:

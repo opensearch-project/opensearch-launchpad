@@ -15,15 +15,15 @@ if __package__ in {None, ""}:
     if _SCRIPT_EXECUTION_PROJECT_ROOT not in sys.path:
         sys.path.insert(0, _SCRIPT_EXECUTION_PROJECT_ROOT)
 
-from opensearch_orchestrator.handler import ThinkingCallbackHandler
-from opensearch_orchestrator.tools import (
+from opensearch_launchpad.handler import ThinkingCallbackHandler
+from opensearch_launchpad.tools import (
     BUILTIN_IMDB_SAMPLE_PATH,
     submit_sample_doc,
     submit_sample_doc_from_local_file,
     submit_sample_doc_from_localhost_index,
     submit_sample_doc_from_url,
 )
-from opensearch_orchestrator.shared import (
+from opensearch_launchpad.shared import (
     Phase,
     SUPPORTED_SAMPLE_FILE_FORMATS_COMMA,
     SUPPORTED_SAMPLE_FILE_FORMATS_MARKDOWN,
@@ -43,11 +43,11 @@ from opensearch_orchestrator.shared import (
     clear_last_worker_run_state,
     get_last_worker_run_state,
 )
-from opensearch_orchestrator.opensearch_ops_tools import cleanup_docs
-from opensearch_orchestrator.solution_planning_assistant import solution_planning_assistant, reset_planner_agent
-from opensearch_orchestrator.planning_session import PlanningSession
-from opensearch_orchestrator.orchestrator_engine import OrchestratorEngine
-from opensearch_orchestrator.worker import (
+from opensearch_launchpad.opensearch_ops_tools import cleanup_docs
+from opensearch_launchpad.solution_planning_assistant import solution_planning_assistant, reset_planner_agent
+from opensearch_launchpad.planning_session import PlanningSession
+from opensearch_launchpad.orchestrator_engine import OrchestratorEngine
+from opensearch_launchpad.worker import (
     worker_agent as worker_agent_impl,
     _extract_sample_doc_json as worker_extract_sample_doc_json,
     _resolve_localhost_source_protection as worker_resolve_localhost_source_protection,
@@ -73,7 +73,7 @@ Your goal is to guide the user from initial requirements to a finalized, execute
         "System note" stating a sample document has already been loaded, trust it
         and proceed to Phase 2. Do NOT ask the user to paste content or re-upload.
     *   Supported sample sources:
-    *   `1` Built-in IMDb sample file: `opensearch_orchestrator/sample_data/imdb.title.basics.tsv`
+    *   `1` Built-in IMDb sample file: `opensearch_launchpad/sample_data/imdb.title.basics.tsv`
     *   `2` User-provided local path or URL
     *       Supported formats: __SUPPORTED_SAMPLE_FILE_FORMATS_MARKDOWN__
     *       Example: `/path/to/your/data.json` or `https://example.com/sample.json`

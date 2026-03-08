@@ -14,7 +14,7 @@ import threading
 
 from http.server import ThreadingHTTPServer  # noqa: E402
 
-from opensearch_orchestrator.opensearch_ops_tools import (  # noqa: E402
+from opensearch_launchpad.opensearch_ops_tools import (  # noqa: E402
     SEARCH_UI_HOST,
     SEARCH_UI_IDLE_TIMEOUT_SECONDS,
     SEARCH_UI_PORT,

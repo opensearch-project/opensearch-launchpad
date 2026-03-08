@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from opensearch_orchestrator.shared import Phase
+from opensearch_launchpad.shared import Phase
 
 
 class OrchestratorEngine:

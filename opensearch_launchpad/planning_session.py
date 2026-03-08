@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from opensearch_orchestrator.solution_planning_assistant import (
+from opensearch_launchpad.solution_planning_assistant import (
     _create_planner_agent,
     _extract_canonical_capability_ids,
     _extract_localhost_source_index_name,
@@ -25,8 +25,8 @@ from opensearch_orchestrator.solution_planning_assistant import (
     _build_capability_precheck_feedback,
     _looks_like_planner_confirmation,
 )
-from opensearch_orchestrator.opensearch_ops_tools import preview_cap_driven_verification
-from opensearch_orchestrator.shared import looks_like_new_request, looks_like_execution_intent
+from opensearch_launchpad.opensearch_ops_tools import preview_cap_driven_verification
+from opensearch_launchpad.shared import looks_like_new_request, looks_like_execution_intent
 
 
 class PlanningSession:

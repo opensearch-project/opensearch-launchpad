@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.solution_planning_assistant as planner
+import opensearch_launchpad.solution_planning_assistant as planner
 
 
 def test_extract_hybrid_weight_profile_from_context_line():

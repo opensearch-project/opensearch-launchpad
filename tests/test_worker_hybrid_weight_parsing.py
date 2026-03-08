@@ -3,8 +3,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import opensearch_orchestrator.worker as worker
-from opensearch_orchestrator.shared import clear_last_worker_run_state, get_last_worker_run_state
+import opensearch_launchpad.worker as worker
+from opensearch_launchpad.shared import clear_last_worker_run_state, get_last_worker_run_state
 
 
 def test_extract_hybrid_weight_profile_parses_supported_values():
@@ -118,19 +118,19 @@ def test_resolve_localhost_source_protection_from_numbered_markdown_source_line(
 
 
 def test_resolve_source_local_file_from_json_context():
-    context = '{"source_local_file": "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"}'
+    context = '{"source_local_file": "opensearch_launchpad/sample_data/imdb.title.basics.tsv"}'
 
     resolved = worker._resolve_source_local_file(context)
 
-    assert resolved == "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+    assert resolved == "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
 
 
 def test_resolve_source_local_file_from_status_text():
-    context = "Sample document loaded from 'opensearch_orchestrator/sample_data/imdb.title.basics.tsv'."
+    context = "Sample document loaded from 'opensearch_launchpad/sample_data/imdb.title.basics.tsv'."
 
     resolved = worker._resolve_source_local_file(context)
 
-    assert resolved == "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+    assert resolved == "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
 
 
 def test_resolve_source_local_file_from_dataset_source_line_with_absolute_path():
@@ -159,12 +159,12 @@ def test_resolve_source_local_file_from_source_line_with_descriptive_text():
 def test_resolve_source_local_file_from_builtin_sample_hint():
     context = (
         "Dataset: IMDb title basics "
-        "(built-in sample: opensearch_orchestrator/sample_data/imdb.title.basics.tsv)"
+        "(built-in sample: opensearch_launchpad/sample_data/imdb.title.basics.tsv)"
     )
 
     resolved = worker._resolve_source_local_file(context)
 
-    assert resolved == "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+    assert resolved == "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
 
 
 def test_contains_model_memory_failure_detects_expected_signals():
@@ -254,7 +254,7 @@ def test_extract_sample_doc_json_from_embedded_sample_doc_payload():
 
 def test_resolve_resume_source_defaults_from_checkpoint_state():
     previous_state = {
-        "source_local_file": "opensearch_orchestrator/sample_data/imdb.title.basics.tsv",
+        "source_local_file": "opensearch_launchpad/sample_data/imdb.title.basics.tsv",
         "source_index_name": "imdb_titles",
         "sample_doc_json": '{"sample_doc":{"primaryTitle":"Carmencita"}}',
     }
@@ -263,7 +263,7 @@ def test_resolve_resume_source_defaults_from_checkpoint_state():
         previous_state
     )
 
-    assert source_local_file == "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+    assert source_local_file == "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
     assert source_index_name == "imdb_titles"
     assert "Carmencita" in sample_doc_json
 
@@ -271,7 +271,7 @@ def test_resolve_resume_source_defaults_from_checkpoint_state():
 def test_store_worker_run_state_persists_source_metadata():
     clear_last_worker_run_state()
     context = (
-        "Source: opensearch_orchestrator/sample_data/imdb.title.basics.tsv\n"
+        "Source: opensearch_launchpad/sample_data/imdb.title.basics.tsv\n"
         'Sample document: {"primaryTitle":"Carmencita"}\n'
         "Search Capabilities:\n"
         "- Exact: title lookup"
@@ -292,6 +292,6 @@ def test_store_worker_run_state_persists_source_metadata():
     worker._store_worker_run_state(context, report, "<execution_report>{}</execution_report>")
     stored = get_last_worker_run_state()
 
-    assert stored.get("source_local_file") == "opensearch_orchestrator/sample_data/imdb.title.basics.tsv"
+    assert stored.get("source_local_file") == "opensearch_launchpad/sample_data/imdb.title.basics.tsv"
     assert stored.get("source_index_name", "") == ""
     assert "sample_doc" in str(stored.get("sample_doc_json", ""))
