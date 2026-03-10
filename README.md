@@ -1,99 +1,134 @@
 # OpenSearch Launchpad
 
+[![Kiro Power](https://img.shields.io/badge/Kiro-Power-blue?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0xMyAyTDMgMTRoOWwtMS0xMnoiLz48cGF0aCBkPSJNMTEgMjJsMTAtMTJoLTlsMSAxMnoiLz48L3N2Zz4=&style=for-the-badge)](https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad)
+
 An MCP-powered assistant that guides you from initial requirements to a running OpenSearch search setup. It collects a sample document, gathers preferences, plans a search architecture, and executes the plan — creating indices, ML models, ingest pipelines, and a local search UI — with optional deployment to Amazon OpenSearch Service or Serverless.
 
 ---
 
-## Kiro Power (Primary Integration)
+## Install in Kiro (One Click)
 
-OpenSearch Launchpad is packaged as a **Kiro Power**. Install it in Kiro by adding https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad as a power source. Kiro reads `POWER.md` for workflow instructions and calls MCP tools exposed by the server.
+> **[Install OpenSearch Launchpad Power](https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad)** — Add this power source URL in Kiro to get started instantly.
 
-The `mcp.json` at the repo root runs `uvx opensearch-launchpad@latest` — no local clone required.
-
----
-
-## Standalone CLI (Local Development)
-
-Start the interactive orchestrator in a terminal:
-
-```bash
-python opensearch_orchestrator/orchestrator.py
-```
-
-The orchestrator guides you through sample collection, requirements gathering, solution planning, and execution — all in one interactive session.
+1. Open **Kiro**
+2. Go to **Powers** panel
+3. Click **Add Power** and paste:
+   ```
+   https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad
+   ```
+4. Kiro reads `POWER.md` and connects the MCP server automatically — no local clone required.
 
 ---
 
-## MCP Server
+## Prerequisites
 
-The MCP server exposes the orchestrator workflow as a set of phase tools. Any MCP-compatible client (Claude Desktop, MCP Inspector, etc.) can drive the conversation.
+- **Python 3.11+** and [`uv`](https://docs.astral.sh/uv/getting-started/installation/) installed
+- **Docker** installed and running ([Download Docker](https://docs.docker.com/get-docker/))
+- **For AWS deployment (optional):** AWS credentials configured — see [AWS Setup](#aws-setup-optional)
 
-### Prerequisites
+---
 
-Install [uv](https://docs.astral.sh/uv/) (one-time, no sudo needed):
+## What It Does
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+OpenSearch Launchpad walks you through five phases to build a production-ready search solution:
 
-### Running from PyPI
+| Phase | What happens |
+|-------|-------------|
+| **1. Sample Document** | Provide a sample document (built-in IMDB dataset, local file, URL, existing index, or paste JSON) |
+| **2. Preferences** | Set your budget, performance priority, query pattern, and deployment preferences |
+| **3. Plan** | An AI planner designs your search architecture (BM25, semantic, hybrid, or agentic) |
+| **4. Execute** | Automatically creates OpenSearch indices, ML models, ingest pipelines, and a search UI locally |
+| **4.5 Evaluate** | *(Optional)* Evaluate search quality and iterate on the architecture |
+| **5. Deploy** | *(Optional)* Deploy to Amazon OpenSearch Service or Amazon OpenSearch Serverless |
 
-```bash
-uvx opensearch-launchpad@latest
-```
+### Quick Start
 
-If installed via `pip`:
+After installing the power, try:
 
-```bash
-opensearch-launchpad
-```
+> *"I want to build a semantic search app with 10M docs"*
 
-> This starts a stdio MCP server (JSON-RPC), not an interactive CLI. Launch it from an MCP client. For an interactive terminal session, use `python opensearch_orchestrator/orchestrator.py` instead.
+Kiro will guide you through each phase interactively.
 
-### Running locally (dev)
+---
 
-```bash
-uv run opensearch_orchestrator/mcp_server.py
-```
+## AWS Setup (Optional)
 
-`uv` reads inline script metadata and auto-installs dependencies into a cached virtual environment.
+Phase 5 deploys your local search solution to AWS. This is optional — Phases 1–4 work entirely locally.
 
-### Claude Desktop integration
+### 1. Add AWS MCP Servers
 
-1. Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+Add these servers to the power's `mcp.json` configuration in Kiro:
 
 ```json
+{
+  "mcpServers": {
+    "awslabs.aws-api-mcp-server": {
+      "command": "uvx",
+      "args": ["awslabs.aws-api-mcp-server@latest"],
+      "env": { "FASTMCP_LOG_LEVEL": "ERROR" }
+    },
+    "aws-docs": {
+      "command": "uvx",
+      "args": ["awslabs.aws-documentation-mcp-server@latest"],
+      "env": { "FASTMCP_LOG_LEVEL": "ERROR" }
+    },
+    "opensearch-mcp-server": {
+      "command": "uvx",
+      "args": ["opensearch-mcp-server-py@latest"],
+      "env": { "FASTMCP_LOG_LEVEL": "ERROR" }
+    }
+  }
+}
+```
+
+### 2. Configure AWS Credentials
+
+```bash
+aws configure
+```
+
+Or set environment variables:
+
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION="us-east-1"
+```
+
+### 3. Required IAM Permissions
+
+Your AWS user/role needs permissions for:
+- **OpenSearch Service** — create/manage domains and serverless collections
+- **IAM** — create and manage roles for OpenSearch
+- **Bedrock** — invoke models (for semantic and agentic search)
+
+---
+
+## Troubleshooting
+
+### `spawn uvx ENOENT` or Docker not found
+
+Some MCP clients cannot find `uvx` or `docker` from the JSON config environment.
+
+**Fix:** Locate the full paths and add them to `env.PATH` in your MCP config:
+
+```bash
+which uvx      # e.g. /Users/you/.local/bin/uvx
+which docker   # e.g. /usr/local/bin/docker
+```
+
+Then in Kiro: **Cmd+Shift+P** → `Kiro: Open user MCP config (JSON)` and update:
+
+```jsonc
 {
   "mcpServers": {
     "opensearch-launchpad": {
       "command": "uvx",
-      "args": ["opensearch-launchpad@latest"]
-    }
-  }
-}
-```
-
-2. Restart Claude Desktop. The `opensearch_workflow` prompt is available in the prompt picker and describes the full tool sequence.
-
-### Generic MCP clients
-
-Any MCP-compatible client can connect via stdio and discover tools with `tools/list`. The `opensearch_workflow` prompt (available via `prompts/list`) describes the workflow. Tool docstrings also include prerequisite hints.
-
-### Without uv
-
-Install dependencies manually and point to the server script:
-
-```bash
-pip install mcp opensearch-py
-```
-
-```json
-{
-  "mcpServers": {
-    "opensearch-launchpad": {
-      "command": "python3",
-      "args": ["opensearch_orchestrator/mcp_server.py"],
-      "cwd": "/path/to/agent"
+      "args": ["opensearch-launchpad@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "PATH": "/usr/local/bin:/usr/bin:/bin:/Users/you/.local/bin"
+      }
     }
   }
 }
@@ -101,73 +136,10 @@ pip install mcp opensearch-py
 
 ---
 
-## MCP Workflow Tools
+## Contributing
 
-The server exposes high-level phase tools:
+See the [Developer Guide](DEVELOPER_GUIDE.md) for local development setup, MCP server internals, tool reference, and the release process.
 
-| Tool | Phase | Description |
-|------|-------|-------------|
-| `load_sample` | 1 | Load a sample document (built-in IMDB, local file, URL, index, or paste) |
-| `set_preferences` | 2 | Set budget, performance, query pattern, deployment preferences |
-| `start_planning` | 3 | Start the planning agent; returns initial architecture proposal |
-| `refine_plan` | 3 | Send user feedback to refine the proposal |
-| `finalize_plan` | 3 | Finalize the plan when the user confirms |
-| `set_plan_from_planning_complete` | 3 | Parse/store a `<planning_complete>` planner response |
-| `execute_plan` | 4 | Return worker bootstrap payload for execution |
-| `set_execution_from_execution_report` | 4 | Parse/store `<execution_report>` and update retry state |
-| `retry_execution` | 4 | Return resume bootstrap payload from last failed step |
-| `prepare_aws_deployment` | 5 | Return deployment target and steering files for AWS |
-| `connect_search_ui_to_endpoint` | 5 | Switch Search UI to query an AWS OpenSearch endpoint after deployment |
-| `cleanup` | Post | Remove test documents on user request |
+## License
 
-The following execution/knowledge tools are also exposed:
-`create_index`, `create_and_attach_pipeline`, `create_bedrock_embedding_model`,
-`create_local_pretrained_model`, `apply_capability_driven_verification`,
-`launch_search_ui`, `set_search_ui_suggestions`, `read_knowledge_base`,
-`read_dense_vector_models`, `read_sparse_vector_models`, `search_opensearch_org`.
-
-Advanced tools are hidden by default; set `OPENSEARCH_MCP_ENABLE_ADVANCED_TOOLS=true` to expose them.
-
-### Localhost index auth (`source_type="localhost_index"`)
-
-| Mode | Behavior |
-|------|----------|
-| `"default"` | Username `admin`, password `myStrongPassword123!` |
-| `"none"` | No authentication |
-| `"custom"` | Requires `localhost_auth_username` + `localhost_auth_password` |
-
-Local Docker auto-bootstrap uses `admin` and reads the password from `OPENSEARCH_PASSWORD` (falls back to `myStrongPassword123!`).
-
-### Planner backend in MCP mode
-
-- Planning uses client sampling (client LLM only — no server-side Bedrock in MCP mode).
-- If the client does not support `sampling/createMessage`, `start_planning` returns `manual_planning_required=true` with `manual_planner_system_prompt` and `manual_planner_initial_input`. Run planner turns with your LLM and call `set_plan_from_planning_complete(planner_response)`.
-
----
-
-## Release Checklist
-
-```bash
-# 1) Bump version in both files to the same value, e.g. 0.10.1
-#    - pyproject.toml: [project].version
-#    - opensearch_orchestrator/__init__.py: __version__
-
-# Optional sanity check:
-python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb')); import opensearch_orchestrator as pkg; print('pyproject=', p['project']['version'], 'package=', pkg.__version__)"
-
-# 2) All tests must pass
-uv run pytest -q
-
-# 3) Build and verify artifacts
-uv build
-for whl in dist/*.whl; do python -m zipfile -l "$whl"; done
-python -c "import opensearch_orchestrator.mcp_server as m; print(hasattr(m, 'main'))"
-
-# Smoke-test the wheel
-VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
-WHEEL_PATH="$(ls dist/opensearch_launchpad-${VERSION}-*.whl 2>/dev/null || ls dist/opensearch_orchestrator-${VERSION}-*.whl)"
-uvx --from "$WHEEL_PATH" opensearch-launchpad
-
-# 4) Publish to PyPI
-uv publish --token pypi-YOUR-TOKEN
-```
+This project is licensed under the Apache License, Version 2.0. See [LICENSE.txt](LICENSE.txt) for details.
