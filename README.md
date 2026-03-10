@@ -1,14 +1,12 @@
 # OpenSearch Launchpad
 
-[![Kiro Power](https://img.shields.io/badge/Kiro-Power-blue?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0xMyAyTDMgMTRoOWwtMS0xMnoiLz48cGF0aCBkPSJNMTEgMjJsMTAtMTJoLTlsMSAxMnoiLz48L3N2Zz4=&style=for-the-badge)](https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad)
-
 An MCP-powered assistant that guides you from initial requirements to a running OpenSearch search setup. It collects a sample document, gathers preferences, plans a search architecture, and executes the plan — creating indices, ML models, ingest pipelines, and a local search UI — with optional deployment to Amazon OpenSearch Service or Serverless.
 
 ---
 
-## Install in Kiro (One Click)
+## Install in Kiro
 
-> **[Install OpenSearch Launchpad Power](https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad)** — Add this power source URL in Kiro to get started instantly.
+> **[OpenSearch Launchpad Power](https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad)** — Add this power source URL in Kiro to get started.
 
 1. Open **Kiro**
 2. Go to **Powers** panel
