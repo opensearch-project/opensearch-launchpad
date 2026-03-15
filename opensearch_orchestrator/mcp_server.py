@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
     if _SCRIPT_EXECUTION_PROJECT_ROOT not in sys.path:
         sys.path.insert(0, _SCRIPT_EXECUTION_PROJECT_ROOT)
 
+import dataclasses
 import errno
 from contextlib import contextmanager
 import json
@@ -77,6 +78,9 @@ from opensearch_orchestrator.opensearch_ops_tools import (
     cleanup_ui_server as cleanup_ui_server_impl,
     set_search_ui_suggestions as set_search_ui_suggestions_impl,
     connect_search_ui_to_endpoint as connect_search_ui_to_endpoint_impl,
+    build_evaluation_attachments as build_evaluation_attachments_impl,
+    run_data_driven_evaluation_pipeline,
+    process_relevance_judgments as process_relevance_judgments_impl,
     RUNTIME_MODE_ENV,
     RUNTIME_MODE_MCP,
 )
@@ -196,6 +200,520 @@ _engine = create_transport_agnostic_engine()
 # Stores the last suggestion_meta from apply_capability_driven_verification for use in evaluation.
 _last_verification_suggestion_meta: list[dict] = []
 
+# Stores the target index name from apply_capability_driven_verification for use in evaluation.
+_last_verification_index_name: str = ""
+
+
+@dataclasses.dataclass
+class EvaluationState:
+    """Encapsulates all mutable state for the evaluation workflow."""
+
+    # Inputs (set by apply_capability_driven_verification or _fetch_evaluation_inputs)
+    index_name: str = ""
+    suggestion_meta: list[dict] = dataclasses.field(default_factory=list)
+
+    # Intermediate results (set by search + judgment phases)
+    query_results: list[dict[str, object]] = dataclasses.field(default_factory=list)
+    judged_results: list[dict[str, object]] = dataclasses.field(default_factory=list)
+    metrics: dict[str, object] = dataclasses.field(default_factory=dict)
+    evidence_text: str = ""
+
+    # Diagnostic (always populated for debugging)
+    diagnostic: dict[str, object] = dataclasses.field(default_factory=dict)
+
+    def has_judged_results(self) -> bool:
+        return bool(self.judged_results and self.metrics)
+
+    def has_query_results(self) -> bool:
+        return bool(self.query_results)
+
+    def clear_intermediate(self) -> None:
+        """Reset intermediate results for a fresh evaluation run."""
+        self.query_results = []
+        self.judged_results = []
+        self.metrics = {}
+        self.evidence_text = ""
+        self.diagnostic = {}
+
+
+# Single mutable state container for the evaluation workflow.
+_eval_state = EvaluationState()
+
+# Known false-positive index name candidates to reject.
+_INDEX_NAME_REJECT_SET: set[str] = {"name", "index", "index_name", "type", "field"}
+
+
+def _is_valid_index_name(candidate: str) -> bool:
+    """Validate an index name candidate.
+
+    Returns True when *candidate* satisfies **all** of:
+    - length > 2
+    - does not start with ``"."``
+    - is not in :data:`_INDEX_NAME_REJECT_SET`
+    - matches ``[a-z][a-z0-9_-]{2,}``
+    """
+    if not candidate or len(candidate) <= 2:
+        return False
+    if candidate.startswith("."):
+        return False
+    if candidate in _INDEX_NAME_REJECT_SET:
+        return False
+    return bool(re.match(r"^[a-z][a-z0-9_-]{2,}$", candidate))
+
+
+def _resolve_index_name(
+    state_index: str,
+    verification_index: str,
+    worker_context: str,
+) -> tuple[str, str]:
+    """Resolve the target index name using a 3-source priority chain.
+
+    Priority order:
+      1. *state_index* — already stored in :class:`EvaluationState`
+      2. *verification_index* — captured by ``apply_capability_driven_verification``
+      3. *worker_context* — extracted from the last worker execution context
+
+    Returns:
+        ``(index_name, resolution_source)`` where *resolution_source* is one of
+        ``"evaluation_state"``, ``"verification_capture"``, ``"worker_context"``,
+        or ``""`` when no valid candidate is found.
+    """
+    # Priority 1: Already resolved in state
+    if _is_valid_index_name(state_index):
+        return state_index, "evaluation_state"
+
+    # Priority 2: Captured by apply_capability_driven_verification
+    if _is_valid_index_name(verification_index):
+        return verification_index, "verification_capture"
+
+    # Priority 3: Extract from worker execution context
+    extracted = _extract_index_name_from_worker_context(worker_context)
+    if _is_valid_index_name(extracted):
+        return extracted, "worker_context"
+
+    return "", ""
+
+
+# -------------------------------------------------------------------------
+# Pipeline phase functions (wired into start_evaluation in Task 6.1)
+# -------------------------------------------------------------------------
+
+
+def _fetch_evaluation_inputs(state: EvaluationState) -> EvaluationState:
+    """Phase 1: Resolve index_name, suggestion_meta, and populate diagnostic.
+
+    Index name resolution priority:
+      1. state.index_name (already set from previous run or apply_capability_driven_verification)
+      2. _last_verification_index_name (set by apply_capability_driven_verification directly)
+      3. Worker execution context (regex extraction from get_last_worker_run_state)
+
+    Populates state.diagnostic with resolution details.
+    """
+    # Resolve index name via the 3-source priority chain.
+    worker_state = get_last_worker_run_state()
+    worker_context = (
+        str(worker_state.get("context", "")).strip()
+        if isinstance(worker_state, dict)
+        else ""
+    )
+    index_name, source = _resolve_index_name(
+        state_index=state.index_name,
+        verification_index=_last_verification_index_name,
+        worker_context=worker_context,
+    )
+    state.index_name = index_name
+
+    # Load suggestion_meta from verification capture when not already set.
+    if not state.suggestion_meta and _last_verification_suggestion_meta:
+        state.suggestion_meta = list(_last_verification_suggestion_meta)
+
+    # Populate diagnostic with resolution details.
+    state.diagnostic = {
+        "index_name": index_name,
+        "index_name_source": source,
+        "suggestion_meta_count": len(state.suggestion_meta),
+        "data_driven": False,
+        "fallback_reason": "",
+    }
+
+    if not index_name:
+        state.diagnostic["fallback_reason"] = (
+            "index_name could not be resolved from any source"
+        )
+    elif not state.suggestion_meta:
+        state.diagnostic["fallback_reason"] = (
+            "no suggestion_meta available (verification not run?)"
+        )
+
+    return state
+
+
+def _execute_searches(state: EvaluationState) -> EvaluationState:
+    """Phase 2: Execute real searches for each suggestion query against the live index.
+
+    Uses ``run_data_driven_evaluation_pipeline`` which executes queries and
+    builds the judgment prompt in a single call.
+
+    Skips execution when:
+    - index_name is empty or suggestion_meta is empty
+    - state already has query_results or judged_results
+    Handles exceptions by recording error in diagnostic and continuing.
+    """
+    # Skip when inputs are missing.
+    if not state.index_name or not state.suggestion_meta:
+        return state
+
+    # Skip when results already exist (idempotent re-entry).
+    if state.has_query_results() or state.has_judged_results():
+        return state
+
+    try:
+        query_results, judgment_prompt = run_data_driven_evaluation_pipeline(
+            index_name=state.index_name,
+            suggestion_meta=state.suggestion_meta,
+            size=5,
+        )
+        state.query_results = query_results
+        state.diagnostic["queries_executed"] = len(query_results)
+        state.diagnostic["queries_with_hits"] = sum(
+            1 for r in query_results if r.get("hits")
+        )
+        if judgment_prompt:
+            state.diagnostic["judgment_prompt"] = judgment_prompt
+    except Exception as exc:
+        state.diagnostic["fallback_reason"] = f"search execution failed: {exc}"
+
+    return state
+
+
+async def _judge_relevance(
+    state: EvaluationState,
+    ctx=None,
+) -> EvaluationState:
+    """Phase 3: Call LLM to judge query-to-doc relevance (0=irrelevant, 1=relevant).
+
+    If pre-stored judgments exist in state, reuses them (skip).
+    If ctx is available, calls talk_to_client_llm for automated judgment.
+    If ctx is None or LLM fails, sets manual_judgment_required in diagnostic.
+    """
+    # Reuse pre-stored judgments when available.
+    if state.has_judged_results():
+        return state
+
+    # Nothing to judge without query results.
+    if not state.query_results:
+        return state
+
+    # Reuse judgment prompt built by _execute_searches when available.
+    judgment_prompt = str(state.diagnostic.get("judgment_prompt", "")).strip()
+    if not judgment_prompt:
+        # Fallback: build via the pipeline helper (queries already executed).
+        from opensearch_orchestrator.opensearch_ops_tools import build_relevance_judgment_prompt
+        judgment_prompt = build_relevance_judgment_prompt(state.query_results)
+        state.diagnostic["judgment_prompt"] = judgment_prompt
+
+    if ctx is None:
+        # Manual mode: cannot call LLM.
+        state.diagnostic["manual_judgment_required"] = True
+        state.diagnostic["fallback_reason"] = "LLM judgment requires manual mode (no ctx)"
+        return state
+
+    # Automated mode: call LLM for relevance judgment.
+    llm_result = await talk_to_client_llm(
+        system_prompt="You are a search relevance judge.",
+        user_prompt=judgment_prompt,
+        conversation_id="relevance-judgment",
+        reset_conversation=True,
+        ctx=ctx,
+    )
+
+    if "error" not in llm_result and "response" in llm_result:
+        # LLM judgment succeeded — parse, compute metrics, and format evidence in one call.
+        judged, metrics, evidence_text = process_relevance_judgments_impl(
+            state.query_results, judgment_response=str(llm_result["response"]),
+        )
+        state.judged_results = judged
+        state.metrics = metrics
+        state.evidence_text = evidence_text
+        state.diagnostic["data_driven"] = True
+    elif llm_result.get("manual_llm_required"):
+        # Client sampling unavailable — fall back to manual.
+        state.diagnostic["manual_judgment_required"] = True
+        state.diagnostic["fallback_reason"] = "LLM judgment requires manual mode"
+    else:
+        # LLM call failed with an error.
+        state.diagnostic["fallback_reason"] = (
+            f"LLM judgment failed: {llm_result.get('error', 'unknown')}"
+        )
+
+    return state
+
+
+async def _evaluate_quality(
+    state: EvaluationState,
+    ctx=None,
+) -> dict[str, object]:
+    """Phase 4: Call LLM to generate evaluation summary with scores.
+
+    Builds the evaluation prompt with evidence block from judged results.
+    If ctx is available, calls ctx.session.create_message for automated evaluation.
+    If ctx is None or sampling fails, returns manual_evaluation_required payload.
+    """
+    evaluation_prompt = _build_evaluation_prompt_from_state(state)
+
+    if ctx is None:
+        result: dict[str, object] = {
+            "error": "Evaluation failed in client mode.",
+            "details": ["MCP context is unavailable for client sampling."],
+            "manual_evaluation_required": True,
+            "hint": (
+                "Use the returned evaluation_prompt with the client LLM, then call "
+                "`set_evaluation_from_evaluation_complete(evaluator_response)` with the result."
+            ),
+            "evaluation_prompt": evaluation_prompt,
+        }
+        return result
+
+    try:
+        sampling_result = await ctx.session.create_message(
+            messages=[
+                mcp_types.SamplingMessage(
+                    role="user",
+                    content=mcp_types.TextContent(type="text", text=evaluation_prompt),
+                )
+            ],
+            max_tokens=4000,
+            system_prompt=(
+                "You are an OpenSearch search quality evaluator. "
+                "Output your findings inside an <evaluation_complete> block."
+            ),
+        )
+        response_text = _sampling_content_to_text(sampling_result.content)
+        parsed = _parse_evaluation_complete_response(response_text)
+        if "error" in parsed:
+            return {**parsed, "raw_response": response_text}
+
+        result = _engine.set_evaluation(
+            search_quality_summary=str(parsed.get("search_quality_summary", "")),
+            issues=str(parsed.get("issues", "")),
+            suggested_preferences=parsed.get("suggested_preferences"),  # type: ignore[arg-type]
+            metrics=state.metrics if state.metrics else None,
+            improvement_suggestions=str(parsed.get("improvement_suggestions", "")),
+        )
+        _persist_engine_state("start_evaluation")
+        result["evaluation_backend"] = "client_sampling"
+        result["_parsed"] = parsed
+        return result
+
+    except Exception as exc:
+        if _is_method_not_found_error(exc):
+            return {
+                "error": "Evaluation failed in client mode.",
+                "details": [f"client-sampling evaluator failed: {exc}"],
+                "manual_evaluation_required": True,
+                "evaluation_prompt": evaluation_prompt,
+                "hint": (
+                    "The MCP client does not support `sampling/createMessage`. "
+                    "Use the returned evaluation_prompt with the client LLM, then call "
+                    "`set_evaluation_from_evaluation_complete(evaluator_response)` with the result."
+                ),
+            }
+        return {
+            "error": "Evaluation failed in client mode.",
+            "details": [f"client-sampling evaluator failed: {exc}"],
+        }
+
+
+def _build_evaluation_prompt_from_state(state: EvaluationState) -> str:
+    """Build the evaluator prompt using data already in EvaluationState.
+
+    Unlike the legacy approach, this function does NOT re-resolve the index
+    name or re-execute searches.  It uses whatever evidence is available in
+    *state* (judged results → evidence block, query results → unjudged
+    evidence, or legacy verification queries).
+    """
+    plan = _engine.plan_result or {}
+    solution = str(plan.get("solution", "")).strip()
+    capabilities = str(plan.get("search_capabilities", "")).strip()
+
+    # Build evidence block from state data.
+    evidence_block = ""
+    if state.has_judged_results():
+        if state.evidence_text:
+            evidence_block = "\n\n" + state.evidence_text
+        else:
+            # Regenerate evidence_text from judged results (defensive fallback).
+            _, _, evidence_text = process_relevance_judgments_impl(
+                [], judged_results=state.judged_results, metrics=state.metrics,
+            )
+            state.evidence_text = evidence_text
+            evidence_block = "\n\n" + evidence_text
+    elif state.has_query_results():
+        # Unjudged: build a lightweight evidence summary from raw query results.
+        lines: list[str] = ["## Search Quality Evidence (unjudged — awaiting relevance judgment)", ""]
+        for i, qr in enumerate(state.query_results, 1):
+            qt = qr.get("query_text", "")
+            cap = qr.get("capability", "")
+            hits = qr.get("hits", [])
+            if not isinstance(hits, list):
+                hits = []
+            lines.append(f"Query {i}: \"{qt}\" [{cap}]")
+            lines.append(f"  Hits: {len(hits)}")
+            for h in hits[:5]:
+                doc_id = h.get("id", "?") if isinstance(h, dict) else "?"
+                score = float(h.get("score", 0) or 0) if isinstance(h, dict) else 0.0
+                lines.append(f"  - {doc_id} (score={score:.2f})")
+            lines.append("")
+        evidence_block = "\n\n" + "\n".join(lines)
+
+    # Fallback: legacy verification queries text.
+    if not evidence_block:
+        evidence_lines: list[str] = []
+        if state.index_name:
+            evidence_lines.append(f"Index: {state.index_name}")
+        for entry in state.suggestion_meta:
+            if not isinstance(entry, dict):
+                continue
+            cap = str(entry.get("capability", "")).strip()
+            text = str(entry.get("text", "")).strip()
+            if cap and text:
+                evidence_lines.append(f"  - [{cap}] {text}")
+        evidence_block = (
+            "\n\n## Verification Queries\n" + "\n".join(evidence_lines)
+            if evidence_lines else
+            "\n\n(No verification data — findings will be architectural estimates.)"
+        )
+
+    return (
+        "You are an OpenSearch search quality evaluator.\n"
+        "Focus on **relevance** and **user satisfaction** only.\n\n"
+        f"## Plan\n{solution}\n\n"
+        f"## Search Capabilities\n{capabilities}"
+        f"{evidence_block}\n\n"
+        "## Scoring Instructions\n"
+        "Score each dimension honestly from 1–5 based on the per-query evidence above.\n"
+        "Ground every score in the actual search results — cite specific queries, hit counts, "
+        "scores, and relevance judgments to justify each rating.\n"
+        "Do NOT default to high scores. A score of 5 means the setup is genuinely excellent for that dimension.\n"
+        "A score of 3 means it works but has clear gaps. A score of 1–2 means it will frustrate users.\n\n"
+        "Scoring rubric per dimension:\n\n"
+        "**Relevance** — do top results match what the user actually meant?\n"
+        "  5: retrieval method matches all query types in the plan (exact, semantic, fuzzy as applicable)\n"
+        "  4: matches most query types; minor gaps in edge cases\n"
+        "  3: handles navigational/exact queries but misses intent-based or concept queries\n"
+        "  2: only works for very precise keyword matches; synonyms and paraphrases fail\n"
+        "  1: results are largely irrelevant or arbitrary\n\n"
+        "**Query Coverage** — what fraction of query types are actually handled?\n"
+        "  5: all declared capabilities (exact, semantic, structured, fuzzy, combined) are fully supported\n"
+        "  4: most capabilities supported; one minor gap\n"
+        "  3: exact and structured work; semantic or fuzzy missing or weak\n"
+        "  2: only one or two query types work reliably\n"
+        "  1: coverage is minimal or broken\n\n"
+        "**Ranking Quality** — are the right documents surfacing at the top?\n"
+        "  5: scoring is meaningful; exact matches rank above partial matches; filters don't pollute scores\n"
+        "  4: generally good ranking; minor score pollution from structured filters\n"
+        "  3: ranking works for simple cases but structured filters or fuzzy candidates distort scores\n"
+        "  2: ranking is largely arbitrary; BM25 TF-IDF scores dominate even for filter-heavy queries\n"
+        "  1: top results are not the most relevant documents\n\n"
+        "**Capability Gap** — what important search patterns are completely unsupported?\n"
+        "  5: no meaningful gaps given the use case\n"
+        "  4: minor gap (e.g. no autocomplete) that doesn't affect core use case\n"
+        "  3: one significant gap (e.g. no semantic retrieval for a mixed query workload)\n"
+        "  2: multiple gaps that will frustrate users regularly\n"
+        "  1: the retrieval method is fundamentally mismatched to the use case\n\n"
+        "## Issues and Improvement Suggestions\n"
+        "For each issue found, be specific and actionable. Categorize each suggestion with one of these tags:\n"
+        "  [INDEX_MAPPING] — field type changes, adding .keyword sub-fields, fixing boolean typing\n"
+        "  [EMBEDDING_FIELDS] — which fields to embed, combined text fields for richer embeddings\n"
+        "  [MODEL_SELECTION] — switching between sparse/dense models, upgrading model quality\n"
+        "  [SEARCH_PIPELINE] — hybrid weight adjustments, normalization technique changes\n"
+        "  [QUERY_TUNING] — field boosts, fuzziness settings, filter placement, query structure\n\n"
+        "For each suggestion:\n"
+        "- Name the category tag and affected dimension\n"
+        "- Cite the specific query and metric that shows the problem\n"
+        "- Recommend a concrete fix\n"
+        "- Explain the expected improvement\n\n"
+        "If a different retrieval strategy would score meaningfully higher, say so explicitly and set "
+        "suggested_preferences accordingly. Only suggest a restart if the improvement would be significant.\n\n"
+        "Output inside <evaluation_complete> using these exact tags.\n"
+        "Each dimension MUST be on its own line inside its tag.\n"
+        "Use this exact score format: [N/5] where N is the integer score (e.g. [4/5]).\n"
+        "Follow the score with a dash and a concise one-sentence finding.\n\n"
+        "Required output format (replace placeholder text and scores with your actual findings):\n\n"
+        "<evaluation_complete>\n"
+        "<relevance>\n"
+        "Relevance: [<n>/5] - <your relevance finding here>\n"
+        "</relevance>\n"
+        "<query_coverage>\n"
+        "Query Coverage: [<n>/5] - <your query coverage finding here>\n"
+        "</query_coverage>\n"
+        "<ranking_quality>\n"
+        "Ranking Quality: [<n>/5] - <your ranking quality finding here>\n"
+        "</ranking_quality>\n"
+        "<capability_gap>\n"
+        "Capability Gap: [<n>/5] - <your capability gap finding here>\n"
+        "</capability_gap>\n"
+        "<issues>\n"
+        "- [<Category>] [<Dimension>] <issue description citing specific query/metric and recommended fix>\n"
+        "</issues>\n"
+        "<improvement_suggestions>\n"
+        "- [INDEX_MAPPING] <suggestion if applicable>\n"
+        "- [EMBEDDING_FIELDS] <suggestion if applicable>\n"
+        "- [MODEL_SELECTION] <suggestion if applicable>\n"
+        "- [SEARCH_PIPELINE] <suggestion if applicable>\n"
+        "- [QUERY_TUNING] <suggestion if applicable>\n"
+        "Only include categories where you have a concrete suggestion. Omit categories with no issues.\n"
+        "</improvement_suggestions>\n"
+        "<suggested_preferences>\n"
+        "Based on the per-query evidence above, if any issue would be significantly improved by "
+        "changing user preferences, populate this JSON object. Cite the specific queries/metrics "
+        "that justify the change.\n"
+        "Use only valid keys: query_pattern, performance, budget, deployment_preference.\n"
+        "Valid values: query_pattern: mostly-exact|balanced|mostly-semantic, "
+        "performance: speed-first|balanced|accuracy-first, budget: flexible|cost-sensitive, "
+        "deployment_preference: opensearch-node|sagemaker-endpoint|external-embedding-api.\n"
+        "Only include keys where a change would meaningfully improve relevancy. "
+        "If no preference change would help, use {}.\n"
+        "Example: {\"query_pattern\": \"balanced\", \"performance\": \"accuracy-first\"}\n"
+        "</suggested_preferences>\n"
+        "</evaluation_complete>"
+    )
+
+
+def _render_evaluation_response(
+    state: EvaluationState,
+    parsed: dict,
+    base_result: dict,
+) -> dict[str, object]:
+    """Phase 5: Build the final MCP response with guaranteed evaluation_result_table.
+
+    Always includes evaluation_result_table:
+    - Judged table when judged_results available
+    - Unjudged table when only query_results available
+    - Explanatory message when no data available
+
+    Always includes evaluation_diagnostic from state.diagnostic.
+    Attaches restart_additional_context from improvement suggestions when present.
+    """
+    # Ensure query_results are available in diagnostic for unjudged table rendering.
+    if state.query_results and "query_results" not in state.diagnostic:
+        state.diagnostic["query_results"] = state.query_results
+
+    attachments = build_evaluation_attachments_impl(
+        state.judged_results,
+        state.metrics,
+        state.diagnostic,
+        parsed,
+    )
+    base_result.update(attachments)
+
+    # Guarantee evaluation_diagnostic is always present.
+    if state.diagnostic:
+        base_result["evaluation_diagnostic"] = state.diagnostic
+
+    return base_result
+
+
 # -------------------------------------------------------------------------
 # MCP server
 # -------------------------------------------------------------------------
@@ -243,6 +761,10 @@ _QUERY_COVERAGE_PATTERN = re.compile(r"<query_coverage>(.*?)</query_coverage>", 
 _RANKING_QUALITY_PATTERN = re.compile(r"<ranking_quality>(.*?)</ranking_quality>", re.DOTALL | re.IGNORECASE)
 _CAPABILITY_GAP_PATTERN = re.compile(r"<capability_gap>(.*?)</capability_gap>", re.DOTALL | re.IGNORECASE)
 _ISSUES_PATTERN = re.compile(r"<issues>(.*?)</issues>", re.DOTALL | re.IGNORECASE)
+_IMPROVEMENT_SUGGESTIONS_PATTERN = re.compile(
+    r"<improvement_suggestions>(.*?)</improvement_suggestions>",
+    re.DOTALL | re.IGNORECASE,
+)
 _SUGGESTED_PREFERENCES_PATTERN = re.compile(
     r"<suggested_preferences>(.*?)</suggested_preferences>",
     re.DOTALL | re.IGNORECASE,
@@ -383,6 +905,11 @@ def _build_persistable_engine_payload() -> dict[str, object]:
         "state": state_payload,
         "plan_result": normalized_plan_result,
         "evaluation_result": normalized_evaluation_result,
+        "verification_suggestion_meta": list(_last_verification_suggestion_meta),
+        "verification_index_name": _last_verification_index_name,
+        # EvaluationState input fields (Req 13.1) — only persist inputs, not intermediates.
+        "eval_state_index_name": _eval_state.index_name,
+        "eval_state_suggestion_meta": list(_eval_state.suggestion_meta),
     }
 
 
@@ -411,6 +938,42 @@ def _persist_engine_state(reason: str = "", *, recreate: bool = False) -> None:
         detail = f" ({reason})" if reason else ""
         print(
             f"[mcp_server.state] Failed to persist state{detail}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _persist_verification_state() -> None:
+    """Persist only verification globals without overwriting the full engine state."""
+    if not _mcp_state_persistence_enabled():
+        return
+
+    path = _resolve_mcp_state_file_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _mcp_state_file_lock(path):
+            payload: dict[str, object] = {}
+            if path.exists():
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            payload["verification_suggestion_meta"] = list(_last_verification_suggestion_meta)
+            payload["verification_index_name"] = _last_verification_index_name
+            # Include EvaluationState input fields (Req 13.1).
+            payload["eval_state_index_name"] = _eval_state.index_name
+            payload["eval_state_suggestion_meta"] = list(_eval_state.suggestion_meta)
+            temp_path = path.with_suffix(path.suffix + ".tmp")
+            temp_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temp_path.replace(path)
+    except Exception as exc:
+        print(
+            f"[mcp_server.state] Failed to persist verification state: {exc}",
             file=sys.stderr,
             flush=True,
         )
@@ -455,6 +1018,28 @@ def _restore_engine_state_from_file() -> None:
             _engine.evaluation_result = dict(evaluation_result)
         except Exception:
             pass
+
+    # Restore verification globals for data-driven evaluation.
+    global _last_verification_suggestion_meta, _last_verification_index_name
+    restored_meta = payload.get("verification_suggestion_meta")
+    if isinstance(restored_meta, list) and restored_meta:
+        _last_verification_suggestion_meta = list(restored_meta)
+    restored_index = str(payload.get("verification_index_name", "") or "").strip()
+    if restored_index:
+        _last_verification_index_name = restored_index
+
+    # Restore EvaluationState input fields (Req 13.1) — only inputs, not intermediates.
+    # Fall back to legacy verification_* keys for backward compatibility with old state files.
+    eval_index = str(payload.get("eval_state_index_name", "") or "").strip()
+    if not eval_index:
+        eval_index = restored_index  # fall back to verification_index_name
+    if eval_index:
+        _eval_state.index_name = eval_index
+    eval_meta = payload.get("eval_state_suggestion_meta")
+    if not (isinstance(eval_meta, list) and eval_meta):
+        eval_meta = restored_meta  # fall back to verification_suggestion_meta
+    if isinstance(eval_meta, list) and eval_meta:
+        _eval_state.suggestion_meta = list(eval_meta)
 
 
 def _resolve_planner_mode() -> str:
@@ -1496,7 +2081,7 @@ async def apply_capability_driven_verification(
     ctx: Context | None = None,
 ) -> dict[str, object]:
     """Apply capability-driven verification and MCP semantic-query rewrite via client LLM."""
-    global _last_verification_suggestion_meta
+    global _last_verification_suggestion_meta, _last_verification_index_name
     (
         resolved_sample_doc_json,
         resolved_source_local_file,
@@ -1523,6 +2108,19 @@ async def apply_capability_driven_verification(
     meta = result.get("suggestion_meta", [])
     if isinstance(meta, list) and meta:
         _last_verification_suggestion_meta = list(meta)
+    resolved_index = str(result.get("index_name", "") or index_name or "").strip()
+    if resolved_index:
+        _last_verification_index_name = resolved_index
+
+    # Populate EvaluationState inputs alongside the legacy globals (Req 13.1, 13.2, 13.3).
+    # Clear stale intermediate results so a fresh evaluation run starts clean.
+    _eval_state.clear_intermediate()
+    if isinstance(meta, list) and meta:
+        _eval_state.suggestion_meta = list(meta)
+    if resolved_index:
+        _eval_state.index_name = resolved_index
+
+    _persist_verification_state()
     return result
 
 
@@ -1618,6 +2216,8 @@ def _parse_evaluation_complete_response(response_text: str) -> dict[str, object]
         }
 
     issues = issues_match.group(1).strip() if issues_match else ""
+    improvement_suggestions_match = _IMPROVEMENT_SUGGESTIONS_PATTERN.search(content)
+    improvement_suggestions = improvement_suggestions_match.group(1).strip() if improvement_suggestions_match else ""
     suggested_preferences: dict[str, str] = {}
     if prefs_match:
         raw_prefs = prefs_match.group(1).strip()
@@ -1638,6 +2238,8 @@ def _parse_evaluation_complete_response(response_text: str) -> dict[str, object]
         "issues": issues,
         "suggested_preferences": suggested_preferences,
     }
+    if improvement_suggestions:
+        result["improvement_suggestions"] = improvement_suggestions
     if relevance:
         result["relevance"] = relevance
     if query_coverage:
@@ -1661,126 +2263,9 @@ def _extract_index_name_from_worker_context(context: str) -> str:
         m = re.search(pattern, context, re.IGNORECASE)
         if m:
             candidate = m.group(1).strip()
-            # Reject obvious non-index tokens
-            if candidate and not candidate.startswith(".") and len(candidate) > 2:
+            if _is_valid_index_name(candidate):
                 return candidate
     return ""
-
-
-def _build_evaluation_prompt() -> str:
-    """Build the evaluator prompt focused on relevance and user satisfaction."""
-    plan = _engine.plan_result or {}
-    solution = str(plan.get("solution", "")).strip()
-    capabilities = str(plan.get("search_capabilities", "")).strip()
-
-    # Pull index_name from the stored worker execution context.
-    worker_state = get_last_worker_run_state()
-    worker_context = str(worker_state.get("context", "")).strip() if isinstance(worker_state, dict) else ""
-    index_name = _extract_index_name_from_worker_context(worker_context)
-
-    # Pull suggestion_meta captured during apply_capability_driven_verification.
-    suggestion_meta = list(_last_verification_suggestion_meta)
-
-    # Build evidence block from verification queries.
-    evidence_lines: list[str] = []
-    if index_name:
-        evidence_lines.append(f"Index: {index_name}")
-    for entry in suggestion_meta:
-        if not isinstance(entry, dict):
-            continue
-        cap = str(entry.get("capability", "")).strip()
-        text = str(entry.get("text", "")).strip()
-        if cap and text:
-            evidence_lines.append(f"  - [{cap}] {text}")
-
-    evidence_block = (
-        "\n\n## Verification Queries\n" + "\n".join(evidence_lines)
-        if evidence_lines else
-        "\n\n(No verification data — findings will be architectural estimates.)"
-    )
-
-    return (
-        "You are an OpenSearch search quality evaluator.\n"
-        "Focus on **relevance** and **user satisfaction** only.\n\n"
-        f"## Plan\n{solution}\n\n"
-        f"## Search Capabilities\n{capabilities}"
-        f"{evidence_block}\n\n"
-        "## Scoring Instructions\n"
-        "Score each dimension honestly from 1–5 based on the plan and verification queries above.\n"
-        "Do NOT default to high scores. A score of 5 means the setup is genuinely excellent for that dimension.\n"
-        "A score of 3 means it works but has clear gaps. A score of 1–2 means it will frustrate users.\n\n"
-        "Scoring rubric per dimension:\n\n"
-        "**Relevance** — do top results match what the user actually meant?\n"
-        "  5: retrieval method matches all query types in the plan (exact, semantic, fuzzy as applicable)\n"
-        "  4: matches most query types; minor gaps in edge cases\n"
-        "  3: handles navigational/exact queries but misses intent-based or concept queries\n"
-        "  2: only works for very precise keyword matches; synonyms and paraphrases fail\n"
-        "  1: results are largely irrelevant or arbitrary\n\n"
-        "**Query Coverage** — what fraction of query types are actually handled?\n"
-        "  5: all declared capabilities (exact, semantic, structured, fuzzy, combined) are fully supported\n"
-        "  4: most capabilities supported; one minor gap\n"
-        "  3: exact and structured work; semantic or fuzzy missing or weak\n"
-        "  2: only one or two query types work reliably\n"
-        "  1: coverage is minimal or broken\n\n"
-        "**Ranking Quality** — are the right documents surfacing at the top?\n"
-        "  5: scoring is meaningful; exact matches rank above partial matches; filters don't pollute scores\n"
-        "  4: generally good ranking; minor score pollution from structured filters\n"
-        "  3: ranking works for simple cases but structured filters or fuzzy candidates distort scores\n"
-        "  2: ranking is largely arbitrary; BM25 TF-IDF scores dominate even for filter-heavy queries\n"
-        "  1: top results are not the most relevant documents\n\n"
-        "**Capability Gap** — what important search patterns are completely unsupported?\n"
-        "  5: no meaningful gaps given the use case\n"
-        "  4: minor gap (e.g. no autocomplete) that doesn't affect core use case\n"
-        "  3: one significant gap (e.g. no semantic retrieval for a mixed query workload)\n"
-        "  2: multiple gaps that will frustrate users regularly\n"
-        "  1: the retrieval method is fundamentally mismatched to the use case\n\n"
-        "## Issues and Suggestions\n"
-        "For each issue found, be specific and actionable:\n"
-        "- Name the dimension it affects\n"
-        "- Describe exactly what will fail for the user\n"
-        "- Recommend a concrete fix from this list (use whichever apply):\n"
-        "    * Switch retrieval method (e.g. BM25 → Hybrid, Hybrid → Dense Vector)\n"
-        "    * Adjust hybrid weights (e.g. shift lexical-heavy 0.8/0.2 → balanced 0.5/0.5 for more semantic coverage)\n"
-        "    * Change embedding model (e.g. swap sparse for dense, or upgrade to a higher-quality model)\n"
-        "    * Add or remove sparse encoding (e.g. add neural sparse pipeline for concept queries)\n"
-        "    * Tune BM25 parameters (e.g. boost primaryTitle field, move filters to bool.filter to avoid score pollution)\n"
-        "    * Add query boosting (e.g. multi_match with field boosts to promote exact title matches)\n"
-        "    * Other pipeline or mapping changes that would directly improve the failing query type\n"
-        "If a different retrieval strategy would score meaningfully higher, say so explicitly and set "
-        "suggested_preferences accordingly. Only suggest a restart if the improvement would be significant.\n\n"
-        "Output inside <evaluation_complete> using these exact tags.\n"
-        "Each dimension MUST be on its own line inside its tag.\n"
-        "Use this exact score format: [N/5] where N is the integer score (e.g. [4/5]).\n"
-        "Follow the score with a dash and a concise one-sentence finding.\n\n"
-        "Required output format (replace placeholder text and scores with your actual findings):\n\n"
-        "<evaluation_complete>\n"
-        "<relevance>\n"
-        "Relevance: [<n>/5] - <your relevance finding here>\n"
-        "</relevance>\n"
-        "<query_coverage>\n"
-        "Query Coverage: [<n>/5] - <your query coverage finding here>\n"
-        "</query_coverage>\n"
-        "<ranking_quality>\n"
-        "Ranking Quality: [<n>/5] - <your ranking quality finding here>\n"
-        "</ranking_quality>\n"
-        "<capability_gap>\n"
-        "Capability Gap: [<n>/5] - <your capability gap finding here>\n"
-        "</capability_gap>\n"
-        "<issues>\n"
-        "- [<Dimension>] <issue description and recommended fix>\n"
-        "</issues>\n"
-        "<suggested_preferences>\n"
-        "If any issue would be significantly improved by changing user preferences, populate this JSON object.\n"
-        "Use only valid keys: query_pattern, performance, budget, deployment_preference.\n"
-        "Valid values: query_pattern: mostly-exact|balanced|mostly-semantic, "
-        "performance: speed-first|balanced|accuracy-first, budget: flexible|cost-sensitive, "
-        "deployment_preference: opensearch-node|sagemaker-endpoint|external-embedding-api.\n"
-        "Only include keys where a change would meaningfully improve relevancy. "
-        "If no preference change would help, use {}.\n"
-        "Example: {\"query_pattern\": \"balanced\", \"performance\": \"accuracy-first\"}\n"
-        "</suggested_preferences>\n"
-        "</evaluation_complete>"
-    )
 
 
 @mcp.tool()
@@ -1795,68 +2280,45 @@ async def start_evaluation(ctx: Context | None = None) -> dict:
         dict with evaluation findings (search_quality_summary, issues, suggested_preferences),
         or a manual fallback payload when client sampling is unavailable.
     """
+    global _eval_state
+
     if _engine.plan_result is None:
         return {"error": "No finalized plan available. Complete Phase 4 first."}
 
-    evaluation_prompt = _build_evaluation_prompt()
+    # Phase 1: Fetch inputs
+    _eval_state = _fetch_evaluation_inputs(_eval_state)
 
-    if ctx is None:
-        return {
-            "error": "Evaluation failed in client mode.",
-            "details": ["MCP context is unavailable for client sampling."],
-            "manual_evaluation_required": True,
-            "hint": (
-                "Use the returned evaluation_prompt with the client LLM, then call "
-                "`set_evaluation_from_evaluation_complete(evaluator_response)` with the result."
-            ),
-            "evaluation_prompt": evaluation_prompt,
-        }
+    # Phase 2: Execute searches (skip if already have results)
+    if not _eval_state.has_query_results() and not _eval_state.has_judged_results():
+        _eval_state = _execute_searches(_eval_state)
 
-    try:
-        sampling_result = await ctx.session.create_message(
-            messages=[
-                mcp_types.SamplingMessage(
-                    role="user",
-                    content=mcp_types.TextContent(type="text", text=evaluation_prompt),
-                )
-            ],
-            max_tokens=4000,
-            system_prompt=(
-                "You are an OpenSearch search quality evaluator. "
-                "Output your findings inside an <evaluation_complete> block."
-            ),
-        )
-        response_text = _sampling_content_to_text(sampling_result.content)
-        parsed = _parse_evaluation_complete_response(response_text)
-        if "error" in parsed:
-            return {**parsed, "raw_response": response_text}
+    # Phase 3: Judge relevance (skip if already judged)
+    if _eval_state.has_query_results() and not _eval_state.has_judged_results():
+        _eval_state = await _judge_relevance(_eval_state, ctx=ctx)
 
-        result = _engine.set_evaluation(
-            search_quality_summary=str(parsed.get("search_quality_summary", "")),
-            issues=str(parsed.get("issues", "")),
-            suggested_preferences=parsed.get("suggested_preferences"),  # type: ignore[arg-type]
-        )
-        _persist_engine_state("start_evaluation")
-        result["evaluation_backend"] = "client_sampling"
-        return result
+        if _eval_state.diagnostic.get("manual_judgment_required"):
+            return _render_evaluation_response(
+                state=_eval_state,
+                parsed={},
+                base_result={
+                    "manual_judgment_required": True,
+                    "judgment_prompt": _eval_state.diagnostic.get("judgment_prompt", ""),
+                    "hint": "Judge relevance using the judgment_prompt, then call "
+                            "set_relevance_judgments(judgment_response). "
+                            "After that, call start_evaluation again.",
+                },
+            )
 
-    except Exception as exc:
-        if _is_method_not_found_error(exc):
-            return {
-                "error": "Evaluation failed in client mode.",
-                "details": [f"client-sampling evaluator failed: {exc}"],
-                "manual_evaluation_required": True,
-                "hint": (
-                    "The MCP client does not support `sampling/createMessage`. "
-                    "Use the returned evaluation_prompt with the client LLM, then call "
-                    "`set_evaluation_from_evaluation_complete(evaluator_response)` with the result."
-                ),
-                "evaluation_prompt": evaluation_prompt,
-            }
-        return {
-            "error": "Evaluation failed in client mode.",
-            "details": [f"client-sampling evaluator failed: {exc}"],
-        }
+    # Phase 4: Evaluate quality
+    result = await _evaluate_quality(_eval_state, ctx=ctx)
+
+    # Phase 5: Render response
+    parsed = result.pop("_parsed", {})
+    return _render_evaluation_response(
+        state=_eval_state,
+        parsed=parsed,
+        base_result=result,
+    )
 
 
 @mcp.tool()
@@ -1878,12 +2340,73 @@ def set_evaluation_from_evaluation_complete(evaluator_response: str) -> dict:
         search_quality_summary=str(parsed.get("search_quality_summary", "")),
         issues=str(parsed.get("issues", "")),
         suggested_preferences=parsed.get("suggested_preferences"),  # type: ignore[arg-type]
+        metrics=_eval_state.metrics if _eval_state.metrics else None,
+        improvement_suggestions=str(parsed.get("improvement_suggestions", "")),
     )
     _persist_engine_state("set_evaluation_from_evaluation_complete")
     # Surface structured dimensions if present.
     for dim in ("relevance", "query_coverage", "ranking_quality", "capability_gap"):
         if dim in parsed:
             result.setdefault("result", {})[dim] = parsed[dim]  # type: ignore[index]
+    # Use _render_evaluation_response for guaranteed evaluation_result_table (Requirement 7.3).
+    return _render_evaluation_response(
+        state=_eval_state,
+        parsed=parsed,
+        base_result=result,
+    )
+
+
+@mcp.tool()
+def set_relevance_judgments(judgment_response: str) -> dict:
+    """Store LLM relevance judgments from manual mode and recompute evaluation metrics.
+    Call this when `start_evaluation` returns `manual_judgment_required=true`.
+
+    The Kiro agent should use the returned `judgment_prompt` to judge relevance,
+    then pass the response here. After this, call `start_evaluation` again to get
+    the full evaluation with data-driven evidence.
+
+    Args:
+        judgment_response: LLM response text with relevance judgments in the format:
+            ``<doc_id>: <0 or 1> | <reason>``
+
+    Returns:
+        dict with status, judged count, computed metrics, and evaluation_result_table.
+    """
+    if not _eval_state.diagnostic or not _eval_state.diagnostic.get("manual_judgment_required"):
+        return {"error": "No pending manual judgment. Call start_evaluation first."}
+
+    # Use _eval_state.query_results first, fall back to diagnostic for backward compat.
+    query_results = _eval_state.query_results or _eval_state.diagnostic.get("query_results", [])
+    if not query_results:
+        return {"error": "No query results available for judgment."}
+
+    judged_results, data_driven_metrics, evidence_text = process_relevance_judgments_impl(
+        query_results, judgment_response=judgment_response,
+    )
+
+    # Store results in _eval_state for the evaluation pipeline
+    _eval_state.judged_results = judged_results
+    _eval_state.metrics = data_driven_metrics
+    _eval_state.evidence_text = evidence_text
+
+    # Clear the manual judgment flag
+    _eval_state.diagnostic["manual_judgment_required"] = False
+    _eval_state.diagnostic["data_driven"] = True
+    _eval_state.diagnostic["queries_executed"] = len(judged_results)
+
+    # Build response with evaluation_result_table (Requirement 7.2).
+    result: dict = {
+        "status": "Relevance judgments stored.",
+        "judged_count": len(judged_results),
+        "metrics": data_driven_metrics,
+        "hint": "Call start_evaluation again to get the full evaluation with data-driven evidence.",
+    }
+    # Attach evaluation_result_table via the standard attachments builder.
+    attachments = build_evaluation_attachments_impl(
+        _eval_state.judged_results, _eval_state.metrics,
+        _eval_state.diagnostic, {},
+    )
+    result.update(attachments)
     return result
 
 

@@ -3197,6 +3197,742 @@ def apply_capability_driven_verification(
     return result
 
 
+# -------------------------------------------------------------------------
+# Data-Driven Evaluation: query execution, relevance judgment, metrics
+# -------------------------------------------------------------------------
+
+
+def _strip_embedding_fields(source: dict) -> dict:
+    """Remove embedding vector fields from a document source dict.
+
+    Any key ending with ``_embedding``, containing ``embedding`` or ``vector``,
+    or whose value is a list of floats (length > 10) is dropped so that
+    evaluation output stays readable.
+    """
+    cleaned: dict = {}
+    for key, value in source.items():
+        key_lower = key.lower()
+        if key_lower.endswith("_embedding") or "embedding" in key_lower or "vector" in key_lower:
+            continue
+        if isinstance(value, list) and len(value) > 10:
+            # Heuristic: a long list of numbers is almost certainly a vector.
+            if value and isinstance(value[0], (int, float)):
+                continue
+        cleaned[key] = value
+    return cleaned
+
+
+def _truncate_doc_details(source: dict, max_len: int = 120) -> str:
+    """Format a document source dict as a compact string for tabular display.
+
+    Embedding fields are already stripped by ``_strip_embedding_fields``.
+    The output is truncated to *max_len* characters.
+    """
+    parts: list[str] = []
+    for key, value in source.items():
+        if isinstance(value, str):
+            parts.append(f"{key}={value}")
+        elif isinstance(value, (int, float)):
+            parts.append(f"{key}={value}")
+        elif isinstance(value, list):
+            parts.append(f"{key}=[{', '.join(str(v) for v in value[:3])}{'...' if len(value) > 3 else ''}]")
+        else:
+            parts.append(f"{key}={value}")
+    text = "; ".join(parts)
+    if len(text) > max_len:
+        text = text[: max_len - 3] + "..."
+    return text
+
+
+def format_evaluation_result_table(
+    judged_results: list[dict[str, object]],
+    metrics: dict[str, object],
+) -> str:
+    """Build a user-facing markdown table of per-query, per-document evaluation results.
+
+    This is the table the user sees in the evaluation summary — distinct from
+    ``format_evaluation_evidence`` which is the LLM-facing prompt block.
+
+    Format::
+
+        | # | query_text | capability | doc_id | doc_details | score | relevance |
+        |---|------------|------------|--------|-------------|-------|-----------|
+
+    Followed by an aggregate summary section.
+    """
+    lines: list[str] = []
+    lines.append("## Data-Driven Evaluation Results")
+    lines.append("")
+    lines.append("| # | query_text | capability | doc_id | doc_details | score | relevance |")
+    lines.append("|---|------------|------------|--------|-------------|-------|-----------|")
+
+    row_num = 0
+    for jr in judged_results:
+        query_text = str(jr.get("query_text", ""))
+        capability = str(jr.get("capability", ""))
+        hits = jr.get("hits", [])
+        judgments = jr.get("judgments", [])
+        if not isinstance(hits, list):
+            hits = []
+        if not isinstance(judgments, list):
+            judgments = []
+
+        # Build a lookup from doc_id -> judgment
+        judgment_map: dict[str, dict] = {}
+        for j in judgments:
+            if isinstance(j, dict):
+                judgment_map[str(j.get("doc_id", ""))] = j
+
+        for h in hits[:5]:  # Top 5 docs per query
+            row_num += 1
+            doc_id = str(h.get("id", ""))
+            source = h.get("source", {})
+            if not isinstance(source, dict):
+                source = {}
+            doc_details = _truncate_doc_details(source)
+            score = float(h.get("score", 0) or 0)
+            j = judgment_map.get(doc_id, {})
+            rel = j.get("relevance", "?")
+            rel_label = "✓ relevant" if rel == 1 else ("✗ not relevant" if rel == 0 else "?")
+            lines.append(
+                f"| {row_num} | {query_text} | {capability} | {doc_id} | {doc_details} | {score:.2f} | {rel_label} |"
+            )
+
+    lines.append("")
+    lines.append("## Aggregate Metrics")
+    lines.append("")
+    lines.append(f"- Queries evaluated: {metrics.get('query_count', 0)}")
+    mp5 = float(metrics.get("mean_precision_at_5", 0))
+    mp10 = float(metrics.get("mean_precision_at_10", 0))
+    mrr = float(metrics.get("mrr", 0))
+    qfr = float(metrics.get("query_failure_rate", 0))
+    qc = int(metrics.get("query_count", 0))
+    n_fail = int(qfr * qc) if qc else 0
+    lines.append(f"- Mean Precision@5: {mp5:.2f}")
+    lines.append(f"- Mean Precision@10: {mp10:.2f}")
+    lines.append(f"- Mean Reciprocal Rank (MRR): {mrr:.2f}")
+    lines.append(f"- Query Failure Rate: {qfr:.0%} ({n_fail}/{qc})")
+    lines.append("")
+
+    per_cap = metrics.get("per_capability", {})
+    if isinstance(per_cap, dict) and per_cap:
+        lines.append("### Per-Capability Breakdown")
+        lines.append("")
+        lines.append("| Capability | Queries | P@5 | P@10 | MRR |")
+        lines.append("|------------|---------|-----|------|-----|")
+        for cap, stats in per_cap.items():
+            if not isinstance(stats, dict):
+                continue
+            lines.append(
+                f"| {cap} | {stats.get('count', 0)} | "
+                f"{stats.get('mean_p5', 0):.2f} | "
+                f"{stats.get('mean_p10', 0):.2f} | "
+                f"{stats.get('mrr', 0):.2f} |"
+            )
+
+    return "\n".join(lines)
+
+def format_unjudged_result_table(
+    query_results: list[dict[str, object]],
+) -> str:
+    """Build a user-facing markdown table from raw (unjudged) query results.
+
+    Used when LLM relevance judgment is unavailable (manual mode fallback).
+    Shows actual search results with ``?`` for relevance so the Kiro agent
+    can see what the index returned and judge relevance manually.
+
+    Format::
+
+        | # | query_text | capability | doc_id | doc_details | score | relevance |
+        |---|------------|------------|--------|-------------|-------|-----------|
+    """
+    lines: list[str] = []
+    lines.append("## Data-Driven Evaluation Results (awaiting relevance judgment)")
+    lines.append("")
+    lines.append("| # | query_text | capability | doc_id | doc_details | score | relevance |")
+    lines.append("|---|------------|------------|--------|-------------|-------|-----------|")
+
+    row_num = 0
+    query_count = 0
+    queries_with_hits = 0
+    for qr in query_results:
+        query_text = str(qr.get("query_text", ""))
+        capability = str(qr.get("capability", ""))
+        hits = qr.get("hits", [])
+        if not isinstance(hits, list):
+            hits = []
+        query_count += 1
+        if hits:
+            queries_with_hits += 1
+
+        for h in hits[:5]:  # Top 5 docs per query
+            row_num += 1
+            doc_id = str(h.get("id", ""))
+            source = h.get("source", {})
+            if not isinstance(source, dict):
+                source = {}
+            doc_details = _truncate_doc_details(source)
+            score = float(h.get("score", 0) or 0)
+            lines.append(
+                f"| {row_num} | {query_text} | {capability} | {doc_id} | {doc_details} | {score:.2f} | ? |"
+            )
+
+    lines.append("")
+    lines.append("## Summary")
+    lines.append("")
+    lines.append(f"- Queries executed: {query_count}")
+    lines.append(f"- Queries with hits: {queries_with_hits}")
+    lines.append(f"- Relevance judgments: pending (use set_relevance_judgments to provide)")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+
+
+def format_improvement_suggestions_as_context(improvement_suggestions: str) -> str:
+    """Convert structured improvement suggestions into ``additional_context`` for restart.
+
+    The output is a string suitable for passing to ``execute_plan(additional_context=...)``.
+    Each categorized suggestion is preserved so the planner/worker can act on it.
+    """
+    if not improvement_suggestions or not improvement_suggestions.strip():
+        return ""
+    lines: list[str] = [
+        "## Evaluation-Driven Improvements (from previous iteration)",
+        "Apply these changes when re-creating the index, embeddings, or search pipeline:",
+        "",
+    ]
+    for line in improvement_suggestions.strip().splitlines():
+        stripped = line.strip()
+        if stripped:
+            lines.append(stripped if stripped.startswith("-") else f"- {stripped}")
+    return "\n".join(lines)
+
+
+def execute_evaluation_queries(
+    index_name: str,
+    suggestion_meta: list[dict],
+    size: int = 10,
+) -> list[dict[str, object]]:
+    """Execute each suggestion_meta query against the live index and collect results.
+
+    Args:
+        index_name: Target OpenSearch index.
+        suggestion_meta: List of suggestion entries from apply_capability_driven_verification.
+        size: Number of hits to retrieve per query.
+
+    Returns:
+        List of QueryResult dicts with actual search results.
+    """
+    results: list[dict[str, object]] = []
+    if not index_name or not suggestion_meta:
+        return results
+
+    for entry in suggestion_meta:
+        if not isinstance(entry, dict):
+            continue
+        query_text = str(entry.get("text", "")).strip()
+        capability = str(entry.get("capability", "")).strip()
+        field = str(entry.get("field", "")).strip()
+        query_mode_hint = str(entry.get("query_mode", "")).strip()
+        if not query_text:
+            continue
+
+        try:
+            search_result = _search_ui_search(
+                index_name=index_name,
+                query_text=query_text,
+                size=size,
+                debug=True,
+            )
+        except Exception as exc:
+            results.append({
+                "query_text": query_text,
+                "capability": capability,
+                "query_mode": query_mode_hint,
+                "field": field,
+                "took_ms": 0,
+                "used_semantic": False,
+                "fallback_reason": f"search failed: {exc}",
+                "total_hits": 0,
+                "hits": [],
+                "error": str(exc),
+            })
+            continue
+
+        hits = search_result.get("hits", [])
+        results.append({
+            "query_text": query_text,
+            "capability": capability,
+            "query_mode": str(search_result.get("query_mode", query_mode_hint)),
+            "field": field,
+            "took_ms": int(search_result.get("took_ms", 0)),
+            "used_semantic": bool(search_result.get("used_semantic", False)),
+            "fallback_reason": str(search_result.get("fallback_reason", "")),
+            "total_hits": int(search_result.get("total", len(hits))),
+            "hits": [
+                {
+                    "id": str(h.get("id", "")),
+                    "score": float(h.get("score", 0) or 0),
+                    "preview": str(h.get("preview", "")),
+                    "source": _strip_embedding_fields(
+                        dict(h.get("source", {})) if isinstance(h.get("source"), dict) else {}
+                    ),
+                }
+                for h in hits
+            ],
+        })
+    return results
+
+
+def build_relevance_judgment_prompt(
+    query_results: list[dict[str, object]],
+) -> str:
+    """Build an LLM prompt to judge relevance of each query-document pair.
+
+    Args:
+        query_results: Output from execute_evaluation_queries().
+
+    Returns:
+        A prompt string asking the LLM to judge each hit as 0 (irrelevant) or 1 (relevant).
+    """
+    lines: list[str] = [
+        "You are a search relevance judge. For each query below, judge whether each returned "
+        "document is relevant to the query intent.",
+        "",
+        "Rules:",
+        "- Output exactly one line per document in the format: <doc_id>: <0 or 1> | <brief reason>",
+        "- 1 = relevant (the document satisfies the query intent)",
+        "- 0 = irrelevant (the document does not match what the user was looking for)",
+        "- Be strict: only mark as relevant if the document genuinely satisfies the query.",
+        "",
+    ]
+
+    for i, qr in enumerate(query_results, 1):
+        query_text = str(qr.get("query_text", ""))
+        capability = str(qr.get("capability", ""))
+        field = str(qr.get("field", ""))
+        hits = qr.get("hits", [])
+        if not isinstance(hits, list):
+            hits = []
+
+        lines.append(f"--- Query {i}: \"{query_text}\" (capability: {capability}, field: {field}) ---")
+        if not hits:
+            lines.append("(no results returned)")
+            lines.append("")
+            continue
+
+        for hit in hits[:5]:
+            doc_id = str(hit.get("id", ""))
+            source = hit.get("source", {})
+            if not isinstance(source, dict):
+                source = {}
+            source_str = _truncate_doc_details(source, max_len=300)
+            lines.append(f"  [{doc_id}]: {source_str}")
+        lines.append("")
+
+    lines.append("Output your judgments now, one line per document:")
+    return "\n".join(lines)
+
+
+def parse_relevance_judgment_response(
+    response_text: str,
+    query_results: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Parse LLM relevance judgment response and attach judgments to query results.
+
+    Expected format per line: ``<doc_id>: <0 or 1> | <reason>``
+
+    Args:
+        response_text: Raw LLM response text.
+        query_results: Original query results from execute_evaluation_queries().
+
+    Returns:
+        List of JudgedQueryResult dicts with judgments and per-query metrics.
+    """
+    # Build a lookup: doc_id -> (relevance, reason)
+    judgment_map: dict[str, tuple[int, str]] = {}
+    for line in response_text.strip().splitlines():
+        line = line.strip()
+        if not line or line.startswith("---") or line.startswith("("):
+            continue
+        # Parse: doc_id: 0|1 | reason
+        # Also handle: doc_id: 0|1 - reason  or  doc_id: 0|1
+        parts = line.split(":", 1)
+        if len(parts) < 2:
+            continue
+        doc_id = parts[0].strip().strip("[]")
+        rest = parts[1].strip()
+        # Extract 0 or 1
+        rel_str = ""
+        reason = ""
+        if "|" in rest:
+            rel_part, reason = rest.split("|", 1)
+            rel_str = rel_part.strip()
+            reason = reason.strip()
+        elif "-" in rest:
+            rel_part, reason = rest.split("-", 1)
+            rel_str = rel_part.strip()
+            reason = reason.strip()
+        else:
+            rel_str = rest.strip().split()[0] if rest.strip() else ""
+            reason = ""
+
+        try:
+            rel = int(rel_str)
+            if rel not in (0, 1):
+                rel = 1 if rel > 0 else 0
+        except (ValueError, TypeError):
+            continue
+        judgment_map[doc_id] = (rel, reason)
+
+    return apply_relevance_judgments(query_results, judgment_map)
+
+
+def apply_relevance_judgments(
+    query_results: list[dict[str, object]],
+    judgment_map: dict[str, tuple[int, str]],
+) -> list[dict[str, object]]:
+    """Attach relevance judgments to query results and compute per-query metrics.
+
+    Args:
+        query_results: Output from execute_evaluation_queries().
+        judgment_map: Dict mapping doc_id -> (relevance, reason).
+
+    Returns:
+        List of JudgedQueryResult dicts with judgments and per-query metrics.
+    """
+    judged: list[dict[str, object]] = []
+    for qr in query_results:
+        hits = qr.get("hits", [])
+        if not isinstance(hits, list):
+            hits = []
+
+        judgments: list[dict[str, object]] = []
+        for hit in hits:
+            doc_id = str(hit.get("id", ""))
+            if doc_id in judgment_map:
+                rel, reason = judgment_map[doc_id]
+            else:
+                rel, reason = 0, "no judgment provided"
+            judgments.append({
+                "doc_id": doc_id,
+                "relevance": rel,
+                "reason": reason,
+            })
+
+        # Compute per-query metrics
+        relevant_at_5 = sum(1 for j in judgments[:5] if j["relevance"] == 1)
+        relevant_at_10 = sum(1 for j in judgments[:10] if j["relevance"] == 1)
+        p5 = relevant_at_5 / min(5, max(len(judgments), 1))
+        p10 = relevant_at_10 / min(10, max(len(judgments), 1))
+        rr = 0.0
+        for i, j in enumerate(judgments):
+            if j["relevance"] == 1:
+                rr = 1.0 / (i + 1)
+                break
+        has_relevant = any(j["relevance"] == 1 for j in judgments)
+
+        entry = dict(qr)
+        entry["judgments"] = judgments
+        entry["precision_at_5"] = round(p5, 4)
+        entry["precision_at_10"] = round(p10, 4)
+        entry["reciprocal_rank"] = round(rr, 4)
+        entry["has_relevant"] = has_relevant
+        judged.append(entry)
+
+    return judged
+
+
+def compute_evaluation_metrics(
+    judged_results: list[dict[str, object]],
+) -> dict[str, object]:
+    """Compute aggregate search quality metrics from judged query results.
+
+    Args:
+        judged_results: Output from apply_relevance_judgments() or parse_relevance_judgment_response().
+
+    Returns:
+        EvaluationMetrics dict with aggregate and per-capability breakdowns.
+    """
+    query_count = len(judged_results)
+    if query_count == 0:
+        return {
+            "query_count": 0,
+            "mean_precision_at_5": 0.0,
+            "mean_precision_at_10": 0.0,
+            "mrr": 0.0,
+            "query_failure_rate": 0.0,
+            "per_capability": {},
+            "failing_queries": [],
+            "slow_queries": [],
+        }
+
+    total_p5 = 0.0
+    total_p10 = 0.0
+    total_rr = 0.0
+    n_failing = 0
+    failing_queries: list[dict[str, str]] = []
+    slow_queries: list[dict[str, object]] = []
+    per_cap: dict[str, dict[str, object]] = {}
+
+    for jr in judged_results:
+        p5 = float(jr.get("precision_at_5", 0))
+        p10 = float(jr.get("precision_at_10", 0))
+        rr = float(jr.get("reciprocal_rank", 0))
+        has_relevant = bool(jr.get("has_relevant", False))
+        capability = str(jr.get("capability", "unknown"))
+        took_ms = int(jr.get("took_ms", 0))
+
+        total_p5 += p5
+        total_p10 += p10
+        total_rr += rr
+
+        if not has_relevant:
+            n_failing += 1
+            failing_queries.append({
+                "query_text": str(jr.get("query_text", "")),
+                "capability": capability,
+                "query_mode": str(jr.get("query_mode", "")),
+                "fallback_reason": str(jr.get("fallback_reason", "")),
+            })
+
+        if took_ms > 500:
+            slow_queries.append({
+                "query_text": str(jr.get("query_text", "")),
+                "capability": capability,
+                "took_ms": took_ms,
+            })
+
+        if capability not in per_cap:
+            per_cap[capability] = {"count": 0, "sum_p5": 0.0, "sum_p10": 0.0, "sum_rr": 0.0}
+        per_cap[capability]["count"] += 1
+        per_cap[capability]["sum_p5"] += p5
+        per_cap[capability]["sum_p10"] += p10
+        per_cap[capability]["sum_rr"] += rr
+
+    per_capability_out: dict[str, dict[str, object]] = {}
+    for cap, agg in per_cap.items():
+        count = int(agg["count"])
+        per_capability_out[cap] = {
+            "count": count,
+            "mean_p5": round(float(agg["sum_p5"]) / max(count, 1), 4),
+            "mean_p10": round(float(agg["sum_p10"]) / max(count, 1), 4),
+            "mrr": round(float(agg["sum_rr"]) / max(count, 1), 4),
+        }
+
+    return {
+        "query_count": query_count,
+        "mean_precision_at_5": round(total_p5 / query_count, 4),
+        "mean_precision_at_10": round(total_p10 / query_count, 4),
+        "mrr": round(total_rr / query_count, 4),
+        "query_failure_rate": round(n_failing / query_count, 4),
+        "per_capability": per_capability_out,
+        "failing_queries": failing_queries,
+        "slow_queries": slow_queries,
+    }
+
+
+def format_evaluation_evidence(
+    judged_results: list[dict[str, object]],
+    metrics: dict[str, object],
+) -> str:
+    """Format judged results and metrics into a human-readable evidence block for the evaluation prompt.
+
+    Args:
+        judged_results: Output from apply_relevance_judgments() or parse_relevance_judgment_response().
+        metrics: Output from compute_evaluation_metrics().
+
+    Returns:
+        Formatted string to embed in the evaluation prompt.
+    """
+    lines: list[str] = []
+    lines.append("## Search Quality Evidence (Data-Driven)")
+    lines.append("")
+    lines.append("### Aggregate Metrics")
+    lines.append(f"- Queries evaluated: {metrics.get('query_count', 0)}")
+    lines.append(f"- Mean Precision@5: {metrics.get('mean_precision_at_5', 0):.2f}")
+    lines.append(f"- Mean Precision@10: {metrics.get('mean_precision_at_10', 0):.2f}")
+    lines.append(f"- Mean Reciprocal Rank: {metrics.get('mrr', 0):.2f}")
+    qc = int(metrics.get("query_count", 0))
+    fr = float(metrics.get("query_failure_rate", 0))
+    n_fail = int(fr * qc) if qc else 0
+    lines.append(f"- Query Failure Rate: {fr:.0%} ({n_fail}/{qc} queries returned 0 relevant results)")
+    lines.append("")
+
+    per_cap = metrics.get("per_capability", {})
+    if isinstance(per_cap, dict) and per_cap:
+        lines.append("### Per-Capability Breakdown")
+        lines.append("| Capability | Queries | P@5 | P@10 | MRR |")
+        lines.append("|------------|---------|-----|------|-----|")
+        for cap, stats in per_cap.items():
+            if not isinstance(stats, dict):
+                continue
+            lines.append(
+                f"| {cap} | {stats.get('count', 0)} | "
+                f"{stats.get('mean_p5', 0):.2f} | "
+                f"{stats.get('mean_p10', 0):.2f} | "
+                f"{stats.get('mrr', 0):.2f} |"
+            )
+        lines.append("")
+
+    lines.append("### Per-Query Evidence")
+    for i, jr in enumerate(judged_results, 1):
+        qt = jr.get("query_text", "")
+        cap = jr.get("capability", "")
+        qm = jr.get("query_mode", "")
+        took = jr.get("took_ms", 0)
+        p5 = jr.get("precision_at_5", 0)
+        rr = jr.get("reciprocal_rank", 0)
+        total = jr.get("total_hits", 0)
+        fb = jr.get("fallback_reason", "")
+        lines.append(f"Query {i}: \"{qt}\" [{cap} → {qm}]")
+        fb_note = f" | Fallback: {fb}" if fb else ""
+        lines.append(f"  Latency: {took}ms | Hits: {total} | P@5: {p5:.2f} | RR: {rr:.2f}{fb_note}")
+        judgments = jr.get("judgments", [])
+        if isinstance(judgments, list):
+            for j in judgments[:5]:
+                mark = "✓" if j.get("relevance") == 1 else "✗"
+                doc_id = j.get("doc_id", "?")
+                reason = j.get("reason", "")
+                # Find matching hit for score
+                score = 0.0
+                preview = ""
+                for h in jr.get("hits", []):
+                    if isinstance(h, dict) and str(h.get("id", "")) == doc_id:
+                        score = float(h.get("score", 0) or 0)
+                        preview = str(h.get("preview", ""))[:80]
+                        break
+                lines.append(f"  {mark} {doc_id} (score={score:.2f}): \"{preview}\" [{reason}]")
+        lines.append("")
+
+    failing = metrics.get("failing_queries", [])
+    if isinstance(failing, list) and failing:
+        lines.append("### Failing Queries (0 relevant results)")
+        for fq in failing:
+            if not isinstance(fq, dict):
+                continue
+            qt = fq.get("query_text", "")
+            cap = fq.get("capability", "")
+            fb = fq.get("fallback_reason", "")
+            fb_note = f" — fallback: {fb}" if fb else ""
+            lines.append(f"- \"{qt}\" [{cap}]{fb_note}")
+        lines.append("")
+
+    slow = metrics.get("slow_queries", [])
+    if isinstance(slow, list) and slow:
+        lines.append("### Slow Queries (>500ms)")
+        for sq in slow:
+            if not isinstance(sq, dict):
+                continue
+            lines.append(f"- \"{sq.get('query_text', '')}\" [{sq.get('capability', '')}] — {sq.get('took_ms', 0)}ms")
+    else:
+        lines.append("### Slow Queries (>500ms)")
+        lines.append("- (none)")
+
+    return "\n".join(lines)
+
+
+def run_data_driven_evaluation_pipeline(
+    index_name: str,
+    suggestion_meta: list[dict],
+    size: int = 10,
+) -> tuple[list[dict[str, object]], str]:
+    """Execute evaluation queries and build the LLM judgment prompt.
+
+    Returns:
+        (query_results, judgment_prompt) — empty list and "" on failure.
+    """
+    query_results = execute_evaluation_queries(
+        index_name=index_name,
+        suggestion_meta=suggestion_meta,
+        size=size,
+    )
+    if not query_results:
+        return [], ""
+    queries_with_hits = sum(1 for r in query_results if r.get("hits"))
+    if queries_with_hits == 0:
+        return [], ""
+    judgment_prompt = build_relevance_judgment_prompt(query_results)
+    return query_results, judgment_prompt
+
+
+def process_relevance_judgments(
+    query_results: list[dict[str, object]],
+    judgment_response: str = "",
+    judged_results: list[dict[str, object]] | None = None,
+    metrics: dict[str, object] | None = None,
+) -> tuple[list[dict[str, object]], dict[str, object], str]:
+    """Parse LLM judgment response (or use pre-stored results), compute metrics, format evidence.
+
+    Two modes:
+    - **LLM mode**: pass ``query_results`` + ``judgment_response`` to parse, compute, and format.
+    - **Pre-stored mode**: pass ``judged_results`` + ``metrics`` to just format evidence.
+
+    Returns:
+        (judged_results, metrics, evidence_text)
+    """
+    if judged_results and metrics:
+        evidence_text = format_evaluation_evidence(judged_results, metrics)
+        return judged_results, metrics, evidence_text
+    judged = parse_relevance_judgment_response(judgment_response, query_results)
+    computed_metrics = compute_evaluation_metrics(judged)
+    evidence_text = format_evaluation_evidence(judged, computed_metrics)
+    return judged, computed_metrics, evidence_text
+
+
+def build_evaluation_attachments(
+    judged_results: list[dict[str, object]],
+    metrics: dict[str, object],
+    diagnostic: dict[str, object],
+    parsed: dict[str, object],
+) -> dict[str, str]:
+    """High-level facade: build evaluation_result_table and restart_additional_context.
+
+    Combines ``format_evaluation_result_table`` and
+    ``format_improvement_suggestions_as_context`` into a single call.
+
+    When judged results are available, produces the full per-query table with
+    relevance labels and aggregate metrics.  When only raw (unjudged) query
+    results exist in the diagnostic (manual judgment fallback), produces an
+    unjudged table so the user/agent can see actual search results.
+
+    Returns:
+        dict with ``evaluation_result_table`` (always present) and optionally
+        ``restart_additional_context``.
+    """
+    attachments: dict[str, str] = {}
+    if judged_results and metrics:
+        attachments["evaluation_result_table"] = format_evaluation_result_table(
+            judged_results, metrics,
+        )
+    else:
+        # Try to build an unjudged table from raw query_results in the diagnostic.
+        raw_query_results = (
+            diagnostic.get("query_results", [])
+            if isinstance(diagnostic, dict) else []
+        )
+        if isinstance(raw_query_results, list) and raw_query_results:
+            attachments["evaluation_result_table"] = format_unjudged_result_table(
+                raw_query_results,
+            )
+        else:
+            reason = diagnostic.get("fallback_reason", "") if diagnostic else ""
+            attachments["evaluation_result_table"] = (
+                "## Data-Driven Evaluation Results\n\n"
+                "No per-query breakdown available. "
+                + (f"Reason: {reason}" if reason else
+                   "Ensure apply_capability_driven_verification ran successfully before evaluation.")
+            )
+    improvement_suggestions = str(parsed.get("improvement_suggestions", "")).strip()
+    if improvement_suggestions:
+        attachments["restart_additional_context"] = format_improvement_suggestions_as_context(
+            improvement_suggestions,
+        )
+    return attachments
+
+
 def _suggestion_candidates_from_doc(source: dict) -> list[str]:
     """Extract search suggestion candidates from a document, ranked by value quality.
 

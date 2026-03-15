@@ -267,11 +267,16 @@ This power provides an OpenSearch Search Solution building workflow. It collects
 - After successful Phase 4 execution, offer to evaluate search quality before deploying to AWS.
 - Ask the user: *"Would you like to evaluate the search quality? I can analyze relevance, coverage, and capability gaps, and suggest improvements."*
 - If the user agrees, call `start_evaluation()`.
-- If `start_evaluation()` returns `manual_evaluation_required=true`, act as the evaluator using the returned prompt and call `set_evaluation_from_evaluation_complete(evaluator_response)` with the result.
-- Present the evaluation findings to the user, including:
-  - `search_quality_summary`: overall quality narrative
-  - `issues`: identified problems or gaps
-  - `suggested_preferences`: recommended `set_preferences` arguments for a fresh iteration
+- `start_evaluation()` executes verification queries against the live OpenSearch index (no client sampling needed) and returns the results.
+- The response includes `evaluation_result_table` — a markdown table with ACTUAL search results from the live index. Each row has: `#`, `query_text`, `capability`, `doc_id`, `doc_details` (embeddings stripped), `score` (real BM25/vector score), and `relevance` (set to `?` awaiting judgment). **This is real data from the index — do NOT fabricate results or call other search tools.**
+- When `manual_evaluation_required=true` (expected in Kiro powers):
+  1. **Do NOT display the raw table yet.** Do NOT call `search_opensearch_org` or any other tool to get search results — the results are already in `evaluation_result_table`.
+  2. **Act as both relevance judge and evaluator in a single pass**: Read each row in `evaluation_result_table`. For each hit, judge whether the document is relevant to the query intent based on the `doc_details` and `score`. Then produce a complete `<evaluation_complete>` block using the `evaluation_prompt`. Ground your dimension scores in the actual per-query data (e.g., count relevant hits out of top-5 for P@5, check if the first hit is relevant for MRR).
+  3. Call `set_evaluation_from_evaluation_complete(evaluator_response)` with your `<evaluation_complete>` output.
+- **Now render everything together** to the user in a single response:
+  - Re-render the `evaluation_result_table` as a markdown table but with the `?` replaced by your actual relevance judgments (`relevant` or `irrelevant`). Include ALL rows from the original table — do not skip any queries or docs.
+  - Below the table, show the evaluation summary: dimension scores, `search_quality_summary`, `issues`, and `suggested_preferences`.
+- Doc details in the table have embeddings automatically stripped (fields containing `embedding` or `vector` are removed).
 - If `suggested_preferences` is non-empty, offer to start over with the new preferences:
   *"Based on the evaluation, I suggest restarting with updated preferences to improve search quality. Would you like to try again?"*
 - If the user agrees to restart, go back to Phase 1 (`load_sample`) and apply the suggested preferences automatically in Phase 2.

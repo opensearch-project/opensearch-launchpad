@@ -51,6 +51,7 @@ def test_default_tool_surface_is_workflow_only() -> None:
         "set_execution_from_execution_report",
         "set_plan_from_planning_complete",
         "set_preferences",
+        "set_relevance_judgments",
         "set_search_ui_suggestions",
         "start_evaluation",
         "start_planning",

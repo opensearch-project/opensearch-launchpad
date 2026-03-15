@@ -126,6 +126,20 @@ class OrchestratorEngine:
             f"Search Capabilities:\n{capabilities}\n\n"
             f"Keynote:\n{keynote}"
         )
+
+        # Auto-append evaluation improvement suggestions when available.
+        eval_suggestions = ""
+        if isinstance(self.evaluation_result, dict):
+            eval_suggestions = str(
+                self.evaluation_result.get("improvement_suggestions", "")
+            ).strip()
+        if eval_suggestions and eval_suggestions not in (additional_context or ""):
+            worker_context += (
+                "\n\n## Evaluation-Driven Improvements (from previous iteration)\n"
+                "Apply these changes when re-creating the index, embeddings, or search pipeline:\n\n"
+                f"{eval_suggestions}"
+            )
+
         if additional_context:
             worker_context += f"\n\n{additional_context}"
 
@@ -266,6 +280,23 @@ class OrchestratorEngine:
         state = self.state
         if state.sample_doc_json is None:
             return {"error": "No sample document loaded. Call load_sample first."}
+
+        # Auto-apply evaluation suggested_preferences as overrides when available.
+        eval_prefs = (
+            dict(self.evaluation_result.get("suggested_preferences", {}))
+            if isinstance(self.evaluation_result, dict)
+            and isinstance(self.evaluation_result.get("suggested_preferences"), dict)
+            else {}
+        )
+        if eval_prefs:
+            if "budget" in eval_prefs and eval_prefs["budget"] in self._valid_budget:
+                budget = eval_prefs["budget"]
+            if "performance" in eval_prefs and eval_prefs["performance"] in self._valid_performance:
+                performance = eval_prefs["performance"]
+            if "query_pattern" in eval_prefs and eval_prefs["query_pattern"] in self._valid_query_pattern:
+                query_pattern = eval_prefs["query_pattern"]
+            if "deployment_preference" in eval_prefs and eval_prefs["deployment_preference"] in self._valid_deployment:
+                deployment_preference = eval_prefs["deployment_preference"]
 
         budget_val = budget if budget in self._valid_budget else self._default_budget
         perf_val = performance if performance in self._valid_performance else self._default_performance
@@ -431,6 +462,8 @@ class OrchestratorEngine:
         search_quality_summary: str,
         issues: str = "",
         suggested_preferences: dict | None = None,
+        metrics: dict | None = None,
+        improvement_suggestions: str = "",
     ) -> dict:
         """Store a finalized evaluation result.
 
@@ -439,6 +472,8 @@ class OrchestratorEngine:
             issues: Identified issues or gaps in the current setup.
             suggested_preferences: Optional dict of recommended set_preferences args
                 (budget, performance, query_pattern, deployment_preference) for a restart.
+            metrics: Optional data-driven evaluation metrics dict from compute_evaluation_metrics.
+            improvement_suggestions: Optional structured improvement suggestions for restart context.
 
         Returns:
             dict with status and stored evaluation result.
@@ -455,6 +490,11 @@ class OrchestratorEngine:
             "issues": str(issues or "").strip(),
             "suggested_preferences": dict(suggested_preferences) if isinstance(suggested_preferences, dict) else {},
         }
+        if isinstance(metrics, dict) and metrics:
+            self.evaluation_result["metrics"] = dict(metrics)
+        clean_suggestions = str(improvement_suggestions or "").strip()
+        if clean_suggestions:
+            self.evaluation_result["improvement_suggestions"] = clean_suggestions
         return {
             "status": "Evaluation stored.",
             "result": self.evaluation_result,

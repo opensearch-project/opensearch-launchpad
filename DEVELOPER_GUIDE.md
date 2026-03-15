@@ -108,6 +108,9 @@ The server exposes high-level phase tools:
 | `execute_plan` | 4 | Return worker bootstrap payload for execution |
 | `set_execution_from_execution_report` | 4 | Parse/store `<execution_report>` and update retry state |
 | `retry_execution` | 4 | Return resume bootstrap payload from last failed step |
+| `start_evaluation` | 4.5 | Execute verification queries, compute metrics, and run LLM evaluation |
+| `set_relevance_judgments` | 4.5 | Store manual LLM relevance judgments; call when `manual_judgment_required=true` |
+| `set_evaluation_from_evaluation_complete` | 4.5 | Parse/store `<evaluation_complete>` evaluator response |
 | `prepare_aws_deployment` | 5 | Return deployment target and steering files for AWS |
 | `connect_search_ui_to_endpoint` | 5 | Switch Search UI to query an AWS OpenSearch endpoint after deployment |
 | `cleanup` | Post | Remove test documents on user request |
@@ -134,6 +137,22 @@ Local Docker auto-bootstrap uses `admin` and reads the password from `OPENSEARCH
 
 - Planning uses client sampling (client LLM only — no server-side Bedrock in MCP mode).
 - If the client does not support `sampling/createMessage`, `start_planning` returns `manual_planning_required=true` with `manual_planner_system_prompt` and `manual_planner_initial_input`. Run planner turns with your LLM and call `set_plan_from_planning_complete(planner_response)`.
+
+### Data-driven evaluation (Phase 4.5)
+
+After execution, `start_evaluation` runs a data-driven pipeline using phased helpers on an `EvaluationState` object before the LLM scores anything:
+
+1. `_fetch_evaluation_inputs` — resolves `index_name` and loads `suggestion_meta` from verification capture
+2. `_execute_searches` — calls `run_data_driven_evaluation_pipeline()` which executes each verification query against the live index and pre-builds the LLM judgment prompt in a single call; both `query_results` and `judgment_prompt` are stored on state
+3. `_judge_relevance` — reuses the judgment prompt from step 2; on success, calls `process_relevance_judgments()` which parses the LLM response, computes metrics (P@5, P@10, MRR, per-capability breakdown, failure rate), and formats the evidence text — all in one call; results are cached on `EvaluationState.evidence_text`
+4. `_evaluate_quality` — builds the evaluation prompt using cached `evidence_text` from state (no re-computation), then the LLM evaluator produces dimension scores grounded in actual per-query data, plus categorized improvement suggestions tagged with `[INDEX_MAPPING]`, `[EMBEDDING_FIELDS]`, `[MODEL_SELECTION]`, `[SEARCH_PIPELINE]`, or `[QUERY_TUNING]`
+5. `_render_evaluation_response` — calls `build_evaluation_attachments()` to guarantee `evaluation_result_table` is always present (falls back to an explanatory message when data-driven results are unavailable)
+
+The MCP server imports three facade functions from `opensearch_ops_tools.py` for the evaluation pipeline: `run_data_driven_evaluation_pipeline`, `process_relevance_judgments`, and `build_evaluation_attachments`. Lower-level functions (`execute_evaluation_queries`, `build_relevance_judgment_prompt`, `parse_relevance_judgment_response`, `compute_evaluation_metrics`, `format_evaluation_evidence`) remain internal to `opensearch_ops_tools.py`.
+
+When client sampling is unavailable, `start_evaluation` returns `manual_judgment_required=true` with the judgment prompt. The Kiro agent judges relevance and calls `set_relevance_judgments()`, which also uses `process_relevance_judgments()` to parse, compute, and cache results on state. Then `start_evaluation` is called again to complete the evaluation with pre-stored judgments.
+
+If the client doesn't support `sampling/createMessage` for the evaluator step, `start_evaluation` returns `manual_evaluation_required=true` with the evaluation prompt. Run it with your LLM and call `set_evaluation_from_evaluation_complete(evaluator_response)`.
 
 ---
 
