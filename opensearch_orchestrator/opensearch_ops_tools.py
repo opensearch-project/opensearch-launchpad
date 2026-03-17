@@ -4064,6 +4064,27 @@ def _search_ui_suggestions(
     return deduped[:max_count], deduped_meta[:max_count]
 
 
+def _is_vector_value(v: object) -> bool:
+    """Return True if *v* looks like a dense or sparse vector.
+
+    - Dense: list of 16+ numbers.
+    - Sparse: dict of 16+ entries with numeric-string keys and numeric values.
+    """
+    if isinstance(v, list) and len(v) > 16:
+        return all(isinstance(x, (int, float)) for x in v[:8])
+    if isinstance(v, dict) and len(v) > 16:
+        sample_keys = list(v.keys())[:8]
+        sample_vals = list(v.values())[:8]
+        return (all(isinstance(k, str) and k.isdigit() for k in sample_keys)
+                and all(isinstance(x, (int, float)) for x in sample_vals))
+    return False
+
+
+def _strip_vector_fields(source: dict) -> dict:
+    """Return a shallow copy of *source* with vector/embedding fields removed."""
+    return {k: v for k, v in source.items() if not _is_vector_value(v)}
+
+
 def _search_ui_preview_text(source: dict) -> str:
     candidates = _suggestion_candidates_from_doc(source)
     if candidates:
@@ -4765,7 +4786,7 @@ def _search_ui_search(
                                 "id": hit.get("_id"),
                                 "score": hit.get("_score"),
                                 "preview": _search_ui_preview_text(source),
-                                "source": source,
+                                "source": _strip_vector_fields(source),
                             }
                         )
                     return {
@@ -5020,7 +5041,7 @@ def _search_ui_search(
                 "id": hit.get("_id"),
                 "score": hit.get("_score"),
                 "preview": _search_ui_preview_text(source),
-                "source": source,
+                "source": _strip_vector_fields(source),
             }
         )
     return {
