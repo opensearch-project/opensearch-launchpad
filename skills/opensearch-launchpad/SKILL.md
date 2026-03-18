@@ -53,7 +53,7 @@ Start OpenSearch, then ask the user for their data source. Use `load-sample` to 
 
 ### Phase 2 — Gather Preferences
 
-Ask the user **one at a time**: query pattern (keyword, semantic, hybrid, agentic), performance priority, budget, and deployment preference. Skip questions that don't apply.
+Ask the user **one at a time**: query pattern (keyword, semantic, hybrid, agentic) and performance priority. Skip questions that don't apply.
 
 ### Phase 3 — Plan
 

@@ -1,6 +1,93 @@
 # Developer Guide
 
-This guide covers local development, MCP server internals, and the release process for contributors to OpenSearch Launchpad.
+This guide covers how to contribute new skills, local development, MCP server internals, and the release process.
+
+---
+
+## Contributing a New Skill
+
+### 1. Pick a domain category
+
+Skills are organized under `skills/<category>/`. Current categories:
+
+| Category | Purpose |
+|----------|---------|
+| `search/` | Search application building, index setup, semantic/hybrid/neural search |
+| `search-relevance/` | Query tuning, ranking, A/B testing, relevance evaluation |
+| `log-analytics/` | Log ingestion, parsing, dashboards, alerting |
+| `observability/` | Traces, metrics, application monitoring, OpenTelemetry |
+
+Create a new category directory if none fits. Keep category names short and lowercase.
+
+### 2. Create the skill directory
+
+```
+skills/<category>/<skill-name>/
+    SKILL.md              # Required
+    scripts/              # Optional: scripts the agent executes
+    references/           # Optional: detailed docs loaded on demand
+    assets/               # Optional: sample data, templates, configs
+```
+
+### 3. Write SKILL.md
+
+Every skill needs a `SKILL.md` with YAML frontmatter and markdown instructions:
+
+```yaml
+---
+name: opensearch-your-skill-name
+description: >
+  What the skill does and when to activate it. Include keywords users
+  might say so the agent can match this skill to the task. Max 1024 chars.
+compatibility: Any prerequisites (e.g., Docker, uv, Python 3.11+).
+metadata:
+  author: your-github-handle
+  version: "1.0"
+---
+
+# Skill Title
+
+You are a [role]. You help users [do X].
+
+## Key Rules
+
+- Rule 1
+- Rule 2
+
+## Workflow
+
+### Step 1 — ...
+### Step 2 — ...
+```
+
+**Constraints:**
+- `name`: max 64 chars, lowercase + hyphens only
+- `description`: max 1024 chars — this is the sole trigger for agent discovery
+- `SKILL.md` body: under 500 lines (see [DESIGN.md](DESIGN.md) tenet T2)
+- Use `references/` for anything that would push SKILL.md over the limit
+
+### 4. Add scripts (optional)
+
+If your skill needs to execute operations, add scripts under `scripts/`. The IDE agent runs these directly — no MCP server needed.
+
+- Prefer Python scripts run via `uv run python scripts/your_script.py`
+- Include a `--help` flag for discoverability
+- Scripts should work without a running OpenSearch cluster for basic validation
+
+### 5. Add tests
+
+Add tests under `tests/` following the naming convention `test_<skill-category>_<skill-name>_*.py`. Tests must not require a running OpenSearch cluster — use mocks/fakes.
+
+```bash
+# Run your tests
+uv run pytest tests/test_search_your_skill.py -v
+```
+
+### 6. Submit a PR
+
+- Ensure `uv run pytest -q` passes
+- Include a brief description of what the skill does and an example prompt that triggers it
+- The skill will be reviewed for adherence to conventions in [DESIGN.md](DESIGN.md)
 
 ---
 
@@ -100,7 +187,7 @@ The server exposes high-level phase tools:
 | Tool | Phase | Description |
 |------|-------|-------------|
 | `load_sample` | 1 | Load a sample document (built-in IMDB, local file, URL, index, or paste) |
-| `set_preferences` | 2 | Set budget, performance, query pattern, deployment preferences |
+| `set_preferences` | 2 | Set query pattern and performance priority |
 | `start_planning` | 3 | Start the planning agent; returns initial architecture proposal |
 | `refine_plan` | 3 | Send user feedback to refine the proposal |
 | `finalize_plan` | 3 | Finalize the plan when the user confirms |

@@ -1,12 +1,15 @@
-# OpenSearch Launchpad — Architecture & Design
+# OpenSearch Agent Skills — Architecture & Design
 
 ## 1. Overview
 
-OpenSearch Launchpad is an MCP-powered assistant that guides developers from initial
-requirements to a running OpenSearch search setup. It collects a sample document,
-gathers preferences (budget, performance, query pattern), plans a search architecture,
-executes the plan (indices, ML models, ingest pipelines, search UI), and optionally
-deploys to Amazon OpenSearch Service or Serverless.
+This repository is the central collection of **Agent Skills** for OpenSearch. Each
+skill is a self-contained package of instructions, context, and tooling that teaches
+AI coding agents how to work with OpenSearch — from building search applications to
+managing clusters, optimizing queries, and more.
+
+Skills are organized by domain (e.g., `search/`, `cluster/`, `security/`).
+Each skill contains a `SKILL.md` with YAML frontmatter and markdown instructions,
+plus optional scripts, references, and assets.
 
 The system is designed to work across multiple agentic IDEs — Kiro, Cursor, Claude Code,
 VS Code (Copilot), and others — by leveraging the IDE's own agent rather than bundling
@@ -136,7 +139,7 @@ User <-> Kiro Agent <-> MCP Protocol <-> mcp_server.py <-> OrchestratorEngine
 | Phase | Tools | Description |
 |-------|-------|-------------|
 | 1. Collect Sample | `load_sample` | Load sample doc (IMDB, file, URL, index, paste) |
-| 2. Preferences | `set_preferences` | Budget, performance, query pattern, deployment |
+| 2. Preferences | `set_preferences` | Performance priority, query pattern |
 | 3. Plan | `start_planning`, `refine_plan`, `finalize_plan` | Architecture proposal |
 | 4. Execute | `execute_plan`, `retry_execution` | Create index, models, pipelines, UI |
 | 4.5. Evaluate | `start_evaluation` | Optional search quality evaluation |
@@ -211,37 +214,52 @@ workflow state — if the agent drifts, the SKILL.md rules and phase structure c
 
 ### 5.3 Skill Structure
 
-One skill, one workflow. The POWER.md workflow is also expressed as a single
-Agent Skill with reference files for progressive disclosure. The Kiro Power
-remains the production path until Agent Skills is validated across IDEs:
+Skills are organized by domain category, with each skill being a self-contained
+directory. The Kiro Power remains the production path for `opensearch-launchpad`
+until Agent Skills is validated across IDEs:
 
 ```
-skills/opensearch-launchpad/
-    SKILL.md                             # < 300 lines: rules, tool overview, workflow
-    references/
-        phase1-collect-sample.md         # Phase 1 procedures (< 500 lines each)
-        phase2-preferences.md            # Phase 2 procedures
-        phase3-planning.md               # Phase 3 procedures
-        phase4-execution.md              # Phase 4 procedures
-        phase5-aws-deployment.md         # Phase 5 overview + routing
-        serverless-provision.md          # AWS serverless provisioning steps
-        serverless-deploy.md             # AWS serverless search deployment
-        domain-provision.md              # AWS domain provisioning steps
-        domain-deploy.md                 # AWS domain search deployment
-        domain-agentic.md               # AWS agentic search setup
-        aws-reference.md                 # Cost, security, HA reference
+skills/
+    opensearch-launchpad/                    # General-purpose OpenSearch skill (top-level)
+            SKILL.md                         # < 500 lines: rules, workflow, instructions
+            scripts/                         # Execution scripts (IDE agent runs directly)
+                start_opensearch.sh
+                opensearch_ops.py
+                lib/
+            references/                      # Loaded on demand per phase
+                aws-serverless-01-provision.md
+                aws-serverless-02-deploy-search.md
+                aws-domain-01-provision.md
+                aws-domain-02-deploy-search.md
+                aws-domain-03-agentic-setup.md
+                aws-reference.md
+                knowledge/
+                    opensearch_semantic_search_guide.md
+                    dense_vector_models.md
+                    sparse_vector_models.md
+                    agentic_search_guide.md
+    search-relevance/                        # Query tuning, ranking, evaluation
+        opensearch-relevance-tuning/         # Example future skill
+            SKILL.md
+    log-analytics/                           # Log ingestion, parsing, dashboards
+        opensearch-log-pipeline/             # Example future skill
+            SKILL.md
+    observability/                           # Traces, metrics, monitoring
+        opensearch-otel-setup/               # Example future skill
+            SKILL.md
 ```
 
-Users install one skill. The agent activates it when the task matches, and loads
-reference files on demand as the workflow progresses through phases. AWS deployment
-(Phase 5) is just another phase — not a separate skill.
+Users install individual skills. The agent activates a skill when the task matches
+its description, and loads reference files on demand as the workflow progresses.
 
 **Key properties:**
-- Single skill, single install — no user confusion about which to choose
-- `SKILL.md` stays under 500 lines (tenet T2); covers all 5 phases at overview level
-- Reference files loaded on demand per phase (tenet T3)
+- Category-based organization (`search/`, `log-analytics/`, `observability/`, etc.) groups related skills
+- Each skill is self-contained — `SKILL.md` + optional `scripts/`, `references/`, `assets/`
+- `SKILL.md` stays under 500 lines (tenet T2)
+- Reference files loaded on demand (tenet T3)
 - Each reference file covers one domain (tenet T4)
 - Same skill works across Kiro, Claude Code, Cursor, VS Code, JetBrains, etc. (tenet T7)
+- New skills can be added without modifying existing skills or shared infrastructure
 
 ### 5.4 SKILL.md Frontmatter
 
@@ -324,25 +342,25 @@ engine. The IDE agent is the orchestrator, guided by SKILL.md.
 ## 6. Directory Structure
 
 ```
-opensearch-launchpad/
-    skills/                                 # Source of truth for Agent Skills
+opensearch-agent-skills/
+    skills/                                 # All agent skills, organized by domain
         opensearch-launchpad/
-            SKILL.md                        # Workflow instructions (< 500 lines)
-            scripts/                        # Execution scripts (IDE agent runs directly)
-                start_opensearch.sh         # Start local OpenSearch via Docker
-                opensearch_ops.py           # CLI for all OpenSearch operations
-            references/                     # Loaded on demand per phase
-                aws-serverless-01-provision.md
-                aws-serverless-02-deploy-search.md
-                aws-domain-01-provision.md
-                aws-domain-02-deploy-search.md
-                aws-domain-03-agentic-setup.md
-                aws-reference.md
-                knowledge/                  # Domain knowledge
-                    opensearch_semantic_search_guide.md
-                    dense_vector_models.md
-                    sparse_vector_models.md
-                    agentic_search_guide.md
+                SKILL.md                    # Workflow instructions (< 500 lines)
+                scripts/                    # Execution scripts
+                    start_opensearch.sh
+                    opensearch_ops.py
+                    lib/
+                references/                 # Loaded on demand per phase
+                    aws-serverless-01-provision.md
+                    aws-serverless-02-deploy-search.md
+                    aws-domain-01-provision.md
+                    aws-domain-02-deploy-search.md
+                    aws-domain-03-agentic-setup.md
+                    aws-reference.md
+                    knowledge/
+        search-relevance/                   # Future: query tuning, ranking, evaluation
+        log-analytics/                      # Future: log ingestion, parsing, dashboards
+        observability/                      # Future: traces, metrics, monitoring
     .claude/
         skills/ -> ../skills                # Symlink (Claude Code + Cursor)
     .cursor/
@@ -350,42 +368,39 @@ opensearch-launchpad/
     .kiro/
         skills/ -> ../skills                # Symlink (Kiro)
     kiro/
-        opensearch-launchpad/               # Full Kiro Power (released, production)
-            POWER.md                        # Workflow instructions for Kiro agent
-            mcp.json                        # MCP server config (opensearch-launchpad)
-            steering/                       # Step-by-step procedures for Kiro
-                opensearch-workflow.md
-                aws-opensearch-serverless.md
-                aws-opensearch-domain.md
-                oui-design-system.md
-                oui-requirements.md
-                aws/                        # AWS deployment sub-procedures
-    opensearch_orchestrator/                # Custom MCP server (Kiro Power path only)
-        mcp_server.py                       # MCP server entry point
-        orchestrator_engine.py              # State machine + orchestration routing
-        planning_session.py
-        solution_planning_assistant.py
-        worker.py
-        tools.py
-        opensearch_ops_tools.py
-        shared.py
-        handler.py
-        knowledge/                          # Domain knowledge read via MCP tools
-            opensearch_semantic_search_guide.md
-            dense_vector_models.md
-            sparse_vector_models.md
-            agentic_search_guide.md
-        sample_data/
-        ui/
+        opensearch-launchpad/               # Kiro Power (released, production)
+            POWER.md
+            mcp.json
+            steering/
+    opensearch_orchestrator/                # MCP server (Kiro Power path only)
+        mcp_server.py
+        orchestrator_engine.py
+        ...
     tests/
     pyproject.toml
+    DESIGN.md
+    DEVELOPER_GUIDE.md
+    README.md
 ```
 
 The `skills/` directory at the repo root is the single source of truth for Agent
-Skills. IDE-specific directories (`.claude/skills/`, `.cursor/skills/`,
-`.kiro/skills/`) symlink to it, so all IDEs read the same skill content with zero
-duplication. The `opensearch_orchestrator/` module is used only by the Kiro Power
-path — the Agent Skills path uses scripts instead.
+Skills. Skills are organized into domain categories (`search/`, `cluster/`,
+`security/`, etc.). IDE-specific directories (`.claude/skills/`, `.cursor/skills/`,
+`.kiro/skills/`) symlink to `skills/`, so all IDEs read the same skill content with
+zero duplication. The `opensearch_orchestrator/` module is used only by the Kiro
+Power path — the Agent Skills path uses scripts instead.
+
+### Adding a New Skill
+
+To add a new skill:
+
+1. Choose or create a domain category under `skills/` (e.g., `search/`, `cluster/`)
+2. Create a directory for your skill: `skills/<category>/<skill-name>/`
+3. Add a `SKILL.md` with YAML frontmatter (name, description) and instructions
+4. Optionally add `scripts/`, `references/`, or `assets/` subdirectories
+5. Add tests under `tests/` following existing patterns
+
+See the [Developer Guide](DEVELOPER_GUIDE.md) for the full skill template and conventions.
 
 ---
 
