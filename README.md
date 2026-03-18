@@ -1,6 +1,6 @@
-# OpenSearch Agent Skills
+# OpenSearch Launchpad
 
-A curated collection of **Agent Skills** for OpenSearch. Each skill is a self-contained package of instructions, context, and tooling that teaches AI coding agents how to work with OpenSearch — from building search applications to managing clusters, optimizing queries, and more.
+An AI-powered assistant that guides you from initial requirements to a running OpenSearch search setup. It collects a sample document, gathers preferences, plans a search architecture, and executes the plan — creating indices, ML models, ingest pipelines, and a local search UI — with optional deployment to Amazon OpenSearch Service or Serverless.
 
 Works with **Claude Code**, **Cursor**, **Kiro**, and any agent that supports the [Agent Skills specification](https://agentskills.io/specification).
 
