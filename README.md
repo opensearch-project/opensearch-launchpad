@@ -83,6 +83,29 @@ The **Agent Skill** path uses standalone scripts with zero dependency on the MCP
 
 ---
 
+## What It Does
+
+OpenSearch Launchpad walks you through five phases to build a production-ready search solution:
+
+| Phase | What happens |
+|-------|-------------|
+| **1. Sample Document** | Provide a sample document (built-in IMDB dataset, local file, URL, existing index, or paste JSON) |
+| **2. Preferences** | Set your query pattern (keyword, semantic, hybrid, agentic) and performance priority |
+| **3. Plan** | An AI planner designs your search architecture (BM25, semantic, hybrid, or agentic) |
+| **4. Execute** | Automatically creates OpenSearch indices, ML models, ingest pipelines, and a search UI locally |
+| **4.5 Evaluate** | *(Optional)* Evaluate search quality and iterate on the architecture |
+| **5. Deploy** | *(Optional)* Deploy to Amazon OpenSearch Service or Amazon OpenSearch Serverless |
+
+### Quick Start
+
+After installing, just describe what you want to build:
+
+> *"Help me build a hybrid search app for my product catalog"*
+
+The agent guides you through each phase interactively.
+
+---
+
 ## Repo Structure
 
 ```
@@ -101,50 +124,9 @@ tests/                         # All tests
 
 ---
 
-## Contributing a New Skill
+## Contributing
 
-We welcome contributions of new skills! Each skill should teach an AI agent how to accomplish a specific OpenSearch task.
-
-### Skill template
-
-Create a new directory under the appropriate domain category:
-
-```
-skills/<category>/<skill-name>/
-    SKILL.md              # Required: instructions with YAML frontmatter
-    scripts/              # Optional: execution scripts the agent runs
-    references/           # Optional: detailed docs loaded on demand
-```
-
-### SKILL.md format
-
-```yaml
----
-name: opensearch-your-skill-name
-description: >
-  One paragraph describing what the skill does and when agents should
-  activate it. Include trigger keywords that users might say.
-compatibility: List any prerequisites (e.g., Docker, uv, AWS credentials).
-metadata:
-  author: your-github-handle
-  version: "1.0"
----
-
-# Your Skill Name
-
-Instructions for the agent go here. Keep under 500 lines.
-Use references/ for detailed procedures loaded on demand.
-```
-
-### Conventions
-
-- **One skill, one concern** — a skill should do one thing well
-- **SKILL.md under 500 lines** — use `references/` for detailed procedures
-- **No LLM dependencies** — skills leverage the IDE's agent, not a bundled model
-- **Scripts over MCP servers** — prefer standalone scripts the agent runs directly
-- **Tests required** — add tests under `tests/` following existing patterns
-
-See the [Developer Guide](DEVELOPER_GUIDE.md) for testing, CI, and release details. See [DESIGN.md](DESIGN.md) for architectural tenets.
+We welcome new skills! See the [Developer Guide](DEVELOPER_GUIDE.md) for step-by-step instructions on creating a skill, the SKILL.md template, conventions, testing, and the release process.
 
 ---
 
