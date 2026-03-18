@@ -156,6 +156,47 @@ If the client doesn't support `sampling/createMessage` for the evaluator step, `
 
 ---
 
+## Testing
+
+All tests live in the `tests/` directory and run with [pytest](https://docs.pytest.org/) via `uv`:
+
+```bash
+uv run pytest -q
+```
+
+### Test categories
+
+| Category | File pattern | What it covers |
+|----------|-------------|----------------|
+| MCP server / orchestrator | `test_mcp_*.py`, `test_orchestrator_*.py` | MCP tool dispatch, planner/worker flows, evaluation pipeline |
+| Agent Skills (standalone scripts) | `test_agent_skills_*.py` | `skills/opensearch-launchpad/scripts/lib/` — client, operations, samples, search |
+| Shared logic | `test_mapping_*.py`, `test_search_ui_*.py`, `test_worker_*.py`, etc. | Mapping guardrails, query routing, hybrid weights, UI query routing |
+
+### Running a subset
+
+```bash
+# Only Agent Skills tests
+uv run pytest tests/test_agent_skills_*.py -v
+
+# Only MCP tests
+uv run pytest tests/test_mcp_*.py -v
+
+# Single file
+uv run pytest tests/test_agent_skills_search.py -v
+```
+
+### Writing new tests
+
+- Tests must not require a running OpenSearch cluster. Use fake/mock clients (see existing `_FakeClient` patterns).
+- Agent Skills tests import from `skills/opensearch-launchpad/scripts/lib/` by inserting the scripts directory onto `sys.path` (see `test_agent_skills_client.py` for the pattern).
+- MCP/orchestrator tests import from `opensearch_orchestrator/` using the standard `sys.path.insert(0, ...)` pointing to the repo root.
+
+### CI
+
+GitHub Actions runs the full test suite (`uv run pytest -q`) on every push and PR across Linux, macOS, and Windows. See `.github/workflows/ci.yml`.
+
+---
+
 ## Release Process
 
 Releases are handled automatically by GitHub CI when a git tag is pushed. To cut a new release:

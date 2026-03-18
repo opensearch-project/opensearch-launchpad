@@ -360,7 +360,7 @@ This power integrates with the following MCP servers:
 
 - **opensearch-launchpad** (Apache-2.0 license) — core MCP server for the local workflow (Phases 1–4)
 - **awslabs.aws-api-mcp-server** (Apache-2.0 license) — optional, used in Phase 5 for AWS API operations
-- **awslabs.aws-documentation-mcp-server** (Apache-2.0 license) — optional, used in Phase 5 for AWS documentation lookups
+- **aws-knowledge-mcp-server** (Apache-2.0 license) — optional, used in Phase 5 for AWS documentation lookups
 - **opensearch-mcp-server-py** (Apache-2.0 license) — optional, used in Phase 5 for direct OpenSearch cluster operations
 
 Steering files included in this power are original content licensed under Apache-2.0.

@@ -1,10 +1,46 @@
 # OpenSearch Launchpad
 
-An MCP-powered assistant that guides you from initial requirements to a running OpenSearch search setup. It collects a sample document, gathers preferences, plans a search architecture, and executes the plan — creating indices, ML models, ingest pipelines, and a local search UI — with optional deployment to Amazon OpenSearch Service or Serverless.
+An AI-powered assistant that guides you from initial requirements to a running OpenSearch search setup. It collects a sample document, gathers preferences, plans a search architecture, and executes the plan — creating indices, ML models, ingest pipelines, and a local search UI — with optional deployment to Amazon OpenSearch Service or Serverless.
+
+Works with **Claude Code**, **Cursor**, **Kiro**, and any agent that supports the [Agent Skills specification](https://agentskills.io/specification).
 
 ---
 
-## Install in Kiro
+## Install the Agent Skill
+
+Install into any project using [`npx skills`](https://agentskills.io):
+
+```bash
+npx skills add opensearch-project/opensearch-launchpad
+```
+
+This discovers `skills/opensearch-launchpad/SKILL.md` and symlinks it into your agent's skill directory (`.claude/skills/`, `.cursor/skills/`, etc.). Works with Claude Code, Cursor, OpenCode, Codex, and [many more](https://agentskills.io).
+
+### Install options
+
+```bash
+# Install to a specific agent
+npx skills add opensearch-project/opensearch-launchpad -a claude-code
+
+# Install globally (available across all projects)
+npx skills add opensearch-project/opensearch-launchpad -g
+
+# Install to all detected agents
+npx skills add opensearch-project/opensearch-launchpad --all
+
+# List available skills before installing
+npx skills add opensearch-project/opensearch-launchpad --list
+```
+
+After installing, try:
+
+> *"I want to build a semantic search app with 10M docs"*
+
+Your agent reads the skill instructions and runs the scripts directly — **no MCP server required**.
+
+---
+
+## Install in Kiro (Kiro Power)
 
 > **[OpenSearch Launchpad Power](https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad)** — Add this power source URL in Kiro to get started.
 
@@ -15,6 +51,17 @@ An MCP-powered assistant that guides you from initial requirements to a running 
    https://github.com/opensearch-project/opensearch-launchpad/tree/main/kiro/opensearch-launchpad
    ```
 4. Kiro reads `POWER.md` and connects the MCP server automatically — no local clone required.
+
+---
+
+## How it works
+
+| Path | IDEs | How it connects |
+|------|------|-----------------|
+| **Agent Skill** | Claude Code, Cursor, Kiro, OpenCode, Codex | Agent reads `SKILL.md` and runs Python scripts directly via the terminal |
+| **Kiro Power** | Kiro | Kiro runs the MCP server (`opensearch-launchpad`) which exposes phase tools |
+
+The **Agent Skill** path uses standalone scripts in `skills/opensearch-launchpad/scripts/` with zero dependency on the MCP server or `opensearch_orchestrator` package. The **Kiro Power** path is maintained for backward compatibility with existing Kiro Power installations.
 
 ---
 
@@ -41,11 +88,11 @@ OpenSearch Launchpad walks you through five phases to build a production-ready s
 
 ### Quick Start
 
-After installing the power, try:
+After installing, just describe what you want to build:
 
-> *"I want to build a semantic search app with 10M docs"*
+> *"Help me build a hybrid search app for my product catalog"*
 
-Kiro will guide you through each phase interactively.
+The agent guides you through each phase interactively.
 
 ---
 
@@ -65,9 +112,9 @@ Add these servers to the power's `mcp.json` configuration in Kiro:
       "args": ["awslabs.aws-api-mcp-server@latest"],
       "env": { "FASTMCP_LOG_LEVEL": "ERROR" }
     },
-    "aws-docs": {
+    "aws-knowledge-mcp-server": {
       "command": "uvx",
-      "args": ["awslabs.aws-documentation-mcp-server@latest"],
+      "args": ["fastmcp", "run", "https://knowledge-mcp.global.api.aws"],
       "env": { "FASTMCP_LOG_LEVEL": "ERROR" }
     },
     "opensearch-mcp-server": {
