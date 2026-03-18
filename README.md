@@ -12,7 +12,7 @@ Works with **Claude Code**, **Cursor**, **Kiro**, and any agent that supports th
 |-------|----------|-------------|
 | **[opensearch-launchpad](skills/opensearch-launchpad/)** | General | Get started with OpenSearch. Guides you through semantic, hybrid, neural, and agentic search setup with local execution and optional AWS deployment. |
 
-> More skills coming soon — contributions welcome! See [Contributing a New Skill](https://github.com/saratvemulapalli/agent/blob/multi-skill-repo-structure/DEVELOPER_GUIDE.md#contributing-a-new-skill).
+> More skills coming soon — contributions welcome! See [Contributing a New Skill](https://github.com/opensearch-project/opensearch-launchpad/blob/main/DEVELOPER_GUIDE.md#contributing-a-new-skill).
 
 ---
 
