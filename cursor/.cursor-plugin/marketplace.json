@@ -1,0 +1,18 @@
+{
+  "name": "opensearch-launchpad",
+  "owner": {
+    "name": "opensearch-project"
+  },
+  "metadata": {
+    "description": "OpenSearch Launchpad: MCP-powered assistant from requirements to running search (indices, ML models, pipelines, search UI, optional AWS).",
+    "version": "0.1.2",
+    "pluginRoot": "plugins"
+  },
+  "plugins": [
+    {
+      "name": "opensearch-launchpad",
+      "source": "./plugins/opensearch-launchpad",
+      "description": "Agent Skill for OpenSearch search setup (scripts + workflow; semantic/vector/hybrid search, RAG, optional AWS)"
+    }
+  ]
+}

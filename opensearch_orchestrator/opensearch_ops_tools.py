@@ -671,13 +671,22 @@ def _can_connect(opensearch_client: OpenSearch) -> tuple[bool, bool]:
     except Exception as e:
         lowered = normalize_text(e).lower()
         # AOSS (OpenSearch Serverless) returns 404 on GET / but is reachable.
-        # Fall back to cat.indices as a connectivity check.
+        # Fall back to cat.indices, then a wildcard search as connectivity checks.
         if "404" in lowered or "notfounderror" in lowered:
             try:
                 opensearch_client.cat.indices(format="json")
                 return True, False
             except Exception:
                 pass
+            # AOSS may not support _cat/indices either; try a lightweight search.
+            try:
+                opensearch_client.search(index="*", body={"size": 0}, params={"timeout": "5s"})
+                return True, False
+            except Exception as search_e:
+                search_lowered = normalize_text(search_e).lower()
+                # A 403 or security error on search still means we connected successfully.
+                if "403" in search_lowered or "forbidden" in search_lowered:
+                    return True, False
         auth_failure = any(token in lowered for token in _AUTH_FAILURE_TOKENS)
         return False, auth_failure
 

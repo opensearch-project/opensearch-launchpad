@@ -21,7 +21,7 @@ Use OpenSearch Serverless for:
 
 ## Using Official AWS Documentation
 
-If the user has the `awslabs.aws-documentation-mcp-server` MCP server configured, use it to look up the latest official AWS documentation when needed during deployment. This is especially useful for:
+If the user has the `aws-knowledge-mcp-server` MCP server configured, use it to look up the latest official AWS documentation when needed during deployment. This is especially useful for:
 - Verifying current API parameters, collection types, and service limits for OpenSearch Serverless
 - Looking up IAM policy formats, data access policy syntax, and Bedrock model availability
 - Checking the latest details on automatic semantic enrichment, network policies, and encryption options

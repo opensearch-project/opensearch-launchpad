@@ -15,6 +15,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!skills/**/lib/
 lib64/
 parts/
 sdist/
@@ -217,8 +218,13 @@ __marimo__/
 test.ipynb
 
 # IDE-specific local config (not part of the repo)
-.cursor/
+.cursor/*
+!.cursor/skills
 local/
 
-# Kiro local settings
-.kiro/
+# Kiro local settings (ignore all except skills symlink)
+.kiro/*
+!.kiro/skills
+
+# MCP config (may contain credentials)
+.mcp.json

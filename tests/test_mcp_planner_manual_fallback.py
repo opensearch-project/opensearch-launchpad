@@ -34,7 +34,7 @@ def test_set_plan_delegates_normalized_result_to_engine(monkeypatch) -> None:
     captured: dict[str, str] = {}
 
     class _RecordingEngine:
-        def set_plan(self, *, solution: str, search_capabilities: str = "", keynote: str = "") -> dict:
+        def set_plan(self, *, solution: str, search_capabilities: str = "", keynote: str = "", search_strategy: str = "") -> dict:
             captured["solution"] = solution
             captured["search_capabilities"] = search_capabilities
             captured["keynote"] = keynote
@@ -67,7 +67,7 @@ def test_set_plan_from_planning_complete_parses_and_delegates(monkeypatch) -> No
     captured: dict[str, str] = {}
 
     class _RecordingEngine:
-        def set_plan(self, *, solution: str, search_capabilities: str = "", keynote: str = "") -> dict:
+        def set_plan(self, *, solution: str, search_capabilities: str = "", keynote: str = "", search_strategy: str = "") -> dict:
             captured["solution"] = solution
             captured["search_capabilities"] = search_capabilities
             captured["keynote"] = keynote

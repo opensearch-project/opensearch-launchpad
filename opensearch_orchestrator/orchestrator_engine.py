@@ -433,6 +433,7 @@ class OrchestratorEngine:
         solution: str,
         search_capabilities: str = "",
         keynote: str = "",
+        search_strategy: str = "",
     ) -> dict:
         """Store a client-authored finalized plan for later execution.
 
@@ -451,6 +452,10 @@ class OrchestratorEngine:
             "search_capabilities": str(search_capabilities or "").strip(),
             "keynote": str(keynote or "").strip(),
         }
+        # Store explicit strategy if provided, to avoid misdetection later.
+        clean_strategy = str(search_strategy or "").strip().lower()
+        if clean_strategy in ("bm25", "dense_vector", "neural_sparse", "hybrid", "agentic"):
+            self.plan_result["search_strategy"] = clean_strategy
         return {
             "status": "Plan stored.",
             "result": self.plan_result,
@@ -545,21 +550,31 @@ class OrchestratorEngine:
         capabilities = str(self.plan_result.get("search_capabilities", ""))
         keynote = str(self.plan_result.get("keynote", ""))
 
-        # Detect primary search strategy from the solution text.
-        strategy = "bm25"
-        if "agentic" in solution:
-            strategy = "agentic"
-        elif "hybrid" in solution:
-            strategy = "hybrid"
-        elif "neural sparse" in solution or "sparse_encoding" in solution:
-            strategy = "neural_sparse"
-        elif (
-            "dense vector" in solution
-            or "knn" in solution
-            or "hnsw" in solution
-            or "text_embedding" in solution
-        ):
-            strategy = "dense_vector"
+        # Use explicit strategy if set by set_plan(search_strategy=...).
+        explicit_strategy = str(self.plan_result.get("search_strategy", "")).strip().lower()
+        if explicit_strategy in ("bm25", "dense_vector", "neural_sparse", "hybrid", "agentic"):
+            strategy = explicit_strategy
+        else:
+            # Fall back to detecting strategy from the solution text.
+            strategy = "bm25"
+            if "agentic" in solution:
+                strategy = "agentic"
+            elif "hybrid" in solution:
+                strategy = "hybrid"
+            elif (
+                "neural sparse" in solution
+                or "sparse_encoding" in solution
+                or "sparse vector" in solution
+                or "sparse_neural" in solution
+            ):
+                strategy = "neural_sparse"
+            elif (
+                "dense vector" in solution
+                or "knn" in solution
+                or "hnsw" in solution
+                or "text_embedding" in solution
+            ):
+                strategy = "dense_vector"
 
         # Deployment target: agentic requires domain, everything else uses serverless.
         deployment_target = "domain" if strategy == "agentic" else "serverless"
@@ -605,7 +620,7 @@ class OrchestratorEngine:
             "required_mcp_servers": [
                 "awslabs.aws-api-mcp-server",
                 "opensearch-mcp-server",
-                "aws-docs",
+                "aws-knowledge-mcp-server",
             ],
             "state_file_template": {
                 "deployment_target": deployment_target,

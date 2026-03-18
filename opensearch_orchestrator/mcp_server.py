@@ -1778,15 +1778,29 @@ async def finalize_plan() -> dict:
     return result
 
 
-def set_plan(solution: str, search_capabilities: str = "", keynote: str = "") -> dict:
-    """Store a client-authored finalized plan for execution after planner validation.
-    Call this when the MCP client cannot run `start_planning` via client sampling
-    and the client LLM authored the proposal directly.
+@mcp.tool()
+def set_plan(
+    solution: str,
+    search_capabilities: str = "",
+    keynote: str = "",
+    search_strategy: str = "",
+) -> dict:
+    """Store a finalized search architecture plan for execution.
+    Call this after set_preferences when the client LLM has designed
+    or confirmed the search architecture with the user.
+
+    This is the simplest way to commit a plan — no XML required.
 
     Args:
-        solution: Finalized architecture plan text.
-        search_capabilities: Search capability section text.
+        solution: Finalized architecture plan text describing the retrieval
+            method, index configuration, model deployment, and pipeline setup.
+        search_capabilities: Search capability bullets prefixed with
+            Exact:/Semantic:/Structured:/Combined:/Autocomplete:/Fuzzy:.
         keynote: Key assumptions and caveats.
+        search_strategy: Explicit search strategy override. One of:
+            "bm25", "dense_vector", "neural_sparse", "hybrid", "agentic".
+            If empty, strategy is inferred from the solution text.
+            Setting this explicitly avoids misdetection during AWS deployment.
 
     Returns:
         dict with status and stored normalized plan.
@@ -1802,6 +1816,7 @@ def set_plan(solution: str, search_capabilities: str = "", keynote: str = "") ->
         solution=str(normalized.get("solution", "")),
         search_capabilities=str(normalized.get("search_capabilities", "")),
         keynote=str(normalized.get("keynote", "")),
+        search_strategy=str(search_strategy or "").strip().lower(),
     )
     _persist_engine_state("set_plan")
     return result
@@ -1918,6 +1933,42 @@ def set_execution_from_execution_report(
         "status": str(committed.get("status", "Execution report stored.")),
         "execution_report": report,
         "execution_context": str(committed.get("execution_context", "")),
+        "ui_access": _build_ui_access_payload(),
+    }
+
+
+@mcp.tool()
+def complete_execution(
+    status: str = "success",
+    notes: str = "",
+) -> dict:
+    """Mark execution as complete after the client has run all plan steps.
+    Call this after successfully creating the index, model, pipeline,
+    and launching the search UI using the individual MCP tools.
+
+    This is the simplest way to advance to Phase 5 (AWS deployment) —
+    no XML execution report required.
+
+    Args:
+        status: "success" or "failed". Defaults to "success".
+        notes: Optional notes about execution (e.g. steps completed, issues).
+
+    Returns:
+        dict with status confirmation and ui_access information.
+    """
+    if _engine.plan_result is None:
+        return {"error": "No plan stored. Call set_plan first."}
+
+    clean_status = str(status or "success").strip().lower()
+    if clean_status not in ("success", "failed"):
+        return {"error": f"Invalid status '{status}'. Must be 'success' or 'failed'."}
+
+    _engine.phase = Phase.DONE if clean_status == "success" else Phase.EXEC_FAILED
+    _persist_engine_state("complete_execution")
+    return {
+        "status": f"Execution marked as {clean_status}.",
+        "phase": _engine.phase.name,
+        "notes": str(notes or ""),
         "ui_access": _build_ui_access_payload(),
     }
 

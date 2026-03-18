@@ -1,0 +1,25 @@
+{
+  "name": "opensearch-launchpad",
+  "displayName": "OpenSearch Launchpad",
+  "version": "0.1.2",
+  "description": "MCP-powered OpenSearch solution architect: collect a sample document, gather preferences, plan search architecture, provision indices/models/pipelines, launch a local Search UI, and optionally prepare AWS deployment.",
+  "author": {
+    "name": "opensearch-project"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/opensearch-project/opensearch-launchpad",
+  "repository": "https://github.com/opensearch-project/opensearch-launchpad",
+  "keywords": [
+    "opensearch",
+    "mcp",
+    "search",
+    "semantic search",
+    "vector search",
+    "hybrid search",
+    "knn",
+    "rag",
+    "aws",
+    "serverless"
+  ]
+}
+

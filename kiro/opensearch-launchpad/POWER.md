@@ -46,9 +46,9 @@ Before starting Phase 5, add the required MCP servers to your power configuratio
       "disabled": false,
       "autoApprove": []
     },
-    "aws-docs": {
+    "aws-knowledge-mcp-server": {
       "command": "uvx",
-      "args": ["awslabs.aws-documentation-mcp-server@latest"],
+      "args": ["fastmcp", "run", "https://knowledge-mcp.global.api.aws"],
       "env": {
         "FASTMCP_LOG_LEVEL": "ERROR"
       },
