@@ -66,9 +66,8 @@ def _infer_text_fields(doc: dict) -> list[str]:
 
 def load_sample_builtin_imdb() -> str:
     script_dir = Path(__file__).resolve().parent.parent
-    # Look in several possible locations
+    # Look for bundled sample data alongside this script
     candidates = [
-        script_dir / ".." / ".." / ".." / "opensearch_orchestrator" / "sample_data" / "imdb.title.basics.tsv",
         script_dir / "sample_data" / "imdb.title.basics.tsv",
     ]
     for path in candidates:

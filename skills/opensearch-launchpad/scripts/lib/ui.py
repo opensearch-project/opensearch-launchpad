@@ -27,10 +27,9 @@ from .search import (
 SEARCH_UI_HOST = os.getenv("SEARCH_UI_HOST", "127.0.0.1")
 SEARCH_UI_PORT = int(os.getenv("SEARCH_UI_PORT", "8765"))
 
-# Find UI static assets - look relative to repo root
+# Find UI static assets - bundled alongside this script
 _SCRIPT_DIR = Path(__file__).resolve().parent.parent
-_REPO_ROOT = _SCRIPT_DIR.parent.parent.parent
-SEARCH_UI_STATIC_DIR = _REPO_ROOT / "opensearch_orchestrator" / "ui" / "search_builder"
+SEARCH_UI_STATIC_DIR = _SCRIPT_DIR / "ui"
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",

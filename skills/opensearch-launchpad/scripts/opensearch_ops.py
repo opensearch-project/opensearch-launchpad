@@ -155,16 +155,16 @@ def cmd_load_sample(args):
     )
     dispatch = {
         "builtin_imdb": lambda: load_sample_builtin_imdb(),
-        "local_file": lambda: load_sample_from_file(args.source_value),
-        "url": lambda: load_sample_from_url(args.source_value),
-        "localhost_index": lambda: load_sample_from_index(args.source_value),
-        "paste": lambda: load_sample_from_paste(args.source_value),
+        "local_file": lambda: load_sample_from_file(args.value),
+        "url": lambda: load_sample_from_url(args.value),
+        "localhost_index": lambda: load_sample_from_index(args.value),
+        "paste": lambda: load_sample_from_paste(args.value),
     }
-    fn = dispatch.get(args.source_type)
+    fn = dispatch.get(args.type)
     if fn:
         print(fn())
     else:
-        print(json.dumps({"error": f"Unknown source type: {args.source_type}"}))
+        print(json.dumps({"error": f"Unknown source type: {args.type}"}))
 
 
 def cmd_cleanup(args):
@@ -208,7 +208,7 @@ def cmd_create_agentic_pipeline(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenSearch operations CLI (standalone)")
+    parser = argparse.ArgumentParser(description="OpenSearch operations CLI (standalone)", allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
     # status
@@ -272,9 +272,9 @@ def main():
 
     # load-sample
     p = sub.add_parser("load-sample", help="Load sample documents")
-    p.add_argument("--source-type", required=True,
+    p.add_argument("-t", "--type", required=True,
                     choices=["builtin_imdb", "local_file", "url", "localhost_index", "paste"])
-    p.add_argument("--source-value", default="")
+    p.add_argument("-v", "--value", default="")
 
     # cleanup
     sub.add_parser("cleanup", help="Stop UI and clean up")

@@ -30,7 +30,7 @@ You are an OpenSearch solution architect. You guide users from initial requireme
 All operations are executed via two scripts in `scripts/` relative to this file:
 
 - **`start_opensearch.sh`** — Start a local OpenSearch cluster via Docker
-- **`opensearch_ops.py`** — CLI for all OpenSearch operations (run `--help` for full command list)
+- **`opensearch_ops.py`** — CLI for all OpenSearch operations. See [CLI Reference](references/cli-reference.md) for exact invocations and examples
 
 ```bash
 bash scripts/start_opensearch.sh
