@@ -1,18 +1,16 @@
 ---
 name: opensearch-launchpad
 description: >
-  Build search applications with OpenSearch and answer OpenSearch knowledge
-  questions. Guides you through setting up semantic search, vector search,
-  hybrid search, neural search, BM25, dense vector, sparse vector, agentic
-  search, RAG, retrieval, embeddings, and KNN. Sets up OpenSearch locally via
-  Docker, plans search architecture, creates indices, ML models, ingest
-  pipelines, launches a search UI, and optionally deploys to AWS OpenSearch
-  Service or Serverless. Processes PDF, DOCX, PPTX, and other document formats
-  using Docling for chunking and ingestion. Searches OpenSearch documentation
-  to answer questions about features, APIs, configuration, version history,
-  and best practices. Use when the user mentions OpenSearch, search app, index
-  setup, search architecture, document search, search relevance, PDF ingestion,
-  document processing, or any related search topic.
+  Build search applications and query log analytics data with OpenSearch.
+  Use this skill when the user mentions OpenSearch, search app, index setup,
+  search architecture, semantic search, vector search, hybrid search, BM25,
+  dense vector, sparse vector, agentic search, RAG, embeddings, KNN, PDF
+  ingestion, document processing, or any related search topic. Also use for
+  log analytics and observability — when the user wants to set up log
+  ingestion, query logs with PPL, analyze error patterns, set up index
+  lifecycle policies, investigate traces, or check stack health. Activate
+  even if the user says log analysis, Fluent Bit, Fluentd, Logstash, syslog,
+  traceId, OpenTelemetry, or log analytics without mentioning OpenSearch.
 compatibility: Requires Docker and uv. AWS deployment requires AWS credentials.
 metadata:
   author: opensearch-project
@@ -78,8 +76,8 @@ Before using any MCP tool, check if the server is available. If a required MCP s
 2. Read the existing config (or start with `{"mcpServers": {}}` if the file doesn't exist).
 3. Merge in the missing server entry from the JSON block above. Do not overwrite existing entries.
 4. Save the file.
-5. Inform the user: *"I've added the [server name] MCP server to your config. It should connect in a few seconds."*
-6. Wait briefly and retry the tool call.
+5. Inform the user: *"I've added the [server name] MCP server to your config. Please restart your IDE or reconnect MCP servers for the changes to take effect."*
+6. Wait for the user to confirm the restart, then retry the tool call.
 
 ## Answering OpenSearch Knowledge Questions
 
@@ -177,3 +175,38 @@ Only if the user wants AWS deployment. Read the appropriate reference guide:
 **Required MCP servers for Phase 5:** `awslabs.aws-api-mcp-server`, `aws-knowledge-mcp-server`, `opensearch-mcp-server` (see Optional MCP Servers section above).
 
 See [AWS Reference](references/aws-reference.md) for cost, security, and constraints.
+
+## Observability & Log Analytics
+
+When the user wants to analyze logs or investigate observability data in OpenSearch, follow a discovery-first approach: understand what indices exist, learn the schema from mappings and sample documents, then build queries. Read the appropriate reference file based on intent:
+
+| Intent | Reference |
+|---|---|
+| Log analytics (discover indices, understand schema, query logs with PPL) | [references/observability/log-analytics.md](references/observability/log-analytics.md) |
+| OTel trace investigation (agent invocations, tool executions, slow spans, errors) | [references/observability/traces.md](references/observability/traces.md) |
+| PPL syntax reference (50+ commands, 14 function categories) | [references/observability/ppl-reference.md](references/observability/ppl-reference.md) |
+
+### Observability Connection Defaults
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENSEARCH_ENDPOINT` | `https://localhost:9200` | OpenSearch base URL |
+| `OPENSEARCH_USER` | `admin` | OpenSearch username |
+| `OPENSEARCH_PASSWORD` | `My_password_123!@#` | OpenSearch password |
+
+### Observability Index Patterns
+
+| Signal | Index Pattern | Key Fields |
+|---|---|---|
+| Traces | `otel-v1-apm-span-*` | `traceId`, `spanId`, `serviceName`, `durationInNanos`, `status.code`, `attributes.gen_ai.*` |
+| Logs | `logs-otel-v1-*` | `traceId`, `spanId`, `severityText`, `body`, `` `resource.attributes.service.name` ``, `@timestamp` |
+| Service Maps | `otel-v2-apm-service-map-*` | `sourceNode`, `targetNode` |
+
+### Base PPL Command
+
+```bash
+curl -sk -u "$OPENSEARCH_USER:$OPENSEARCH_PASSWORD" \
+  -X POST "$OPENSEARCH_ENDPOINT/_plugins/_ppl" \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "<PPL_QUERY>"}'
+```
