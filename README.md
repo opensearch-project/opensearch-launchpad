@@ -90,7 +90,7 @@ OpenSearch Launchpad walks you through five phases to build a production-ready s
 | Phase | What happens |
 |-------|-------------|
 | **1. Sample Document** | Provide a sample document (built-in IMDB dataset, local file, URL, existing index, or paste JSON) |
-| **2. Preferences** | Set your query pattern (keyword, semantic, hybrid, agentic) and performance priority |
+| **2. Preferences** | Set your query pattern (keyword, semantic, hybrid, agentic) and deployment preference |
 | **3. Plan** | An AI planner designs your search architecture (BM25, semantic, hybrid, or agentic) |
 | **4. Execute** | Automatically creates OpenSearch indices, ML models, ingest pipelines, and a search UI locally |
 | **4.5 Evaluate** | *(Optional)* Evaluate search quality and iterate on the architecture |

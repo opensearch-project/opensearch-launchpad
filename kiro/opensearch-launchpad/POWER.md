@@ -184,7 +184,7 @@ After configuration, try: *"I want to build a semantic search app with 10M docs"
 
 An MCP-powered assistant that guides you from requirements to a running OpenSearch search setup.
 
-This power provides an OpenSearch Search Solution building workflow. It collects a sample document, gathers your preferences (budget, performance, query pattern), plans an architecture using an AI planner agent, and executes the plan to create indices, models, pipelines, and a search UI.
+This power provides an OpenSearch Search Solution building workflow. It collects a sample document, gathers your preferences (query pattern), plans an architecture using an AI planner agent, and executes the plan to create indices, models, pipelines, and a search UI.
 
 ## Workflow Phases
 
@@ -228,15 +228,6 @@ This power provides an OpenSearch Search Solution building workflow. It collects
   2. Mostly-semantic (e.g. "early silent films about dancers")
   3. Balanced (mix of both)
 
-  **Performance priority:**
-  1. Speed-first
-  2. Balanced
-  3. Accuracy-first
-
-  **Budget:**
-  1. Flexible
-  2. Cost-sensitive
-
 - If `text_search_required=true` and query pattern is balanced or mostly-semantic, ask deployment preference as a separate follow-up question:
 
   **Deployment preference:**
@@ -247,7 +238,7 @@ This power provides an OpenSearch Search Solution building workflow. It collects
 - If `text_search_required=false`, skip query-pattern and deployment-preference questions.
   Keep the solution numeric/filter/aggregation-first, and do not suggest changing or enriching
   data purely to force semantic search unless the user explicitly requests semantic search.
-- Call `set_preferences(budget, performance, query_pattern, deployment_preference)`.
+- Call `set_preferences(query_pattern, deployment_preference)`.
 
 ### Phase 3: Plan
 - Call `start_planning()` to get the initial architecture proposal.
@@ -315,7 +306,7 @@ This power provides an OpenSearch Search Solution building workflow. It collects
 | Tool | Phase | Description |
 |------|-------|-------------|
 | `load_sample` | 1 | Load a sample document (built-in, file, URL, index, or paste) |
-| `set_preferences` | 2 | Set budget, performance, query pattern, deployment preferences |
+| `set_preferences` | 2 | Set query pattern, deployment preferences |
 | `start_planning` | 3 | Start planning; may return `manual_planning_required` with planner prompt/input |
 | `refine_plan` | 3 | Send user feedback to refine the proposal |
 | `finalize_plan` | 3 | Finalize the plan when the user confirms |

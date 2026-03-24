@@ -187,7 +187,7 @@ The server exposes high-level phase tools:
 | Tool | Phase | Description |
 |------|-------|-------------|
 | `load_sample` | 1 | Load a sample document (built-in IMDB, local file, URL, index, or paste) |
-| `set_preferences` | 2 | Set query pattern and performance priority |
+| `set_preferences` | 2 | Set query pattern and deployment preference |
 | `start_planning` | 3 | Start the planning agent; returns initial architecture proposal |
 | `refine_plan` | 3 | Send user feedback to refine the proposal |
 | `finalize_plan` | 3 | Finalize the plan when the user confirms |

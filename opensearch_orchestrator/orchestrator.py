@@ -314,8 +314,6 @@ _DEFAULT_CUSTOM_REQUIREMENTS_NOTE = (
     "Requirements note: additional custom requirements = none by default unless user explicitly provides them. "
     "Do NOT ask an open-ended additional-requirements checklist."
 )
-_BUDGET_PREFERENCE_NOTE_PREFIX = "Requirements note: budget preference ="
-_PERFORMANCE_PREFERENCE_NOTE_PREFIX = "Requirements note: performance priority ="
 _SEMANTIC_QUERY_PATTERN_PREFERENCE_NOTE_PREFIX = "Requirements note: semantic query-pattern preference ="
 _MODEL_DEPLOYMENT_PREFERENCE_NOTE_PREFIX = "Requirements note: production model deployment preference ="
 _HYBRID_WEIGHT_PROFILE_PREFIX = "Hybrid Weight Profile:"
@@ -351,65 +349,6 @@ _DEFAULT_REALTIME_REQUIREMENT_NOTE_PREFIX = "Requirements note: real-time ingest
 _DEFAULT_CUSTOM_REQUIREMENTS_NOTE_PREFIX = "Requirements note: additional custom requirements = none by default"
 
 
-def _infer_budget_preference_from_text(text: str) -> str | None:
-    """Infer budget preference from free-form user text."""
-    lowered = (text or "").lower()
-    if not lowered:
-        return None
-
-    no_budget_signals = (
-        "no budget",
-        "no cost constraint",
-        "budget is flexible",
-        "flexible with costs",
-        "cost is not a concern",
-        "no budget constraints",
-        "no budget limitation",
-    )
-    if any(signal in lowered for signal in no_budget_signals):
-        return _BUDGET_OPTION_FLEXIBLE
-
-    cost_sensitive_signals = (
-        "budget constraint",
-        "cost-effective",
-        "cost sensitive",
-        "optimize cost",
-        "low cost",
-        "tight budget",
-        "budget limited",
-    )
-    if any(signal in lowered for signal in cost_sensitive_signals):
-        return _BUDGET_OPTION_COST_SENSITIVE
-    return None
-
-
-def _infer_performance_priority_from_text(text: str) -> str | None:
-    """Infer performance-vs-accuracy priority from free-form user text."""
-    lowered = (text or "").lower()
-    if not lowered:
-        return None
-
-    if "speed-first" in lowered:
-        return _PERFORMANCE_OPTION_SPEED
-    if "accuracy-first" in lowered:
-        return _PERFORMANCE_OPTION_ACCURACY
-    if "balanced" in lowered:
-        return _PERFORMANCE_OPTION_BALANCED
-
-    speed_signals = ("ultra-fast", "fast", "speed", "low latency", "latency first")
-    accuracy_signals = ("accuracy", "relevance", "precision", "quality first")
-
-    has_speed = any(signal in lowered for signal in speed_signals)
-    has_accuracy = any(signal in lowered for signal in accuracy_signals)
-    if has_speed and not has_accuracy:
-        return _PERFORMANCE_OPTION_SPEED
-    if has_accuracy and not has_speed:
-        return _PERFORMANCE_OPTION_ACCURACY
-    if has_speed and has_accuracy:
-        return _PERFORMANCE_OPTION_BALANCED
-    return None
-
-
 def _infer_prefix_wildcard_preference_from_text(text: str) -> bool | None:
     """Infer explicit user intent for prefix/wildcard behavior."""
     lowered = (text or "").lower()
@@ -431,37 +370,6 @@ def _infer_prefix_wildcard_preference_from_text(text: str) -> bool | None:
     if any(re.search(pattern, lowered) for pattern in positive_patterns):
         return True
     return None
-
-
-def _build_budget_preference_note(preference: str) -> str:
-    """Build canonical budget preference requirement note."""
-    if preference == _BUDGET_OPTION_COST_SENSITIVE:
-        return (
-            "Requirements note: budget preference = cost-sensitive. "
-            "Prioritize cost-effective architecture choices."
-        )
-    return (
-        "Requirements note: budget preference = flexible (no strict budget constraints). "
-        "Do not optimize primarily for cost."
-    )
-
-
-def _build_performance_preference_note(preference: str) -> str:
-    """Build canonical performance priority requirement note."""
-    if preference == _PERFORMANCE_OPTION_SPEED:
-        return (
-            "Requirements note: performance priority = speed-first. "
-            "Prefer lower-latency retrieval settings when trade-offs are required."
-        )
-    if preference == _PERFORMANCE_OPTION_ACCURACY:
-        return (
-            "Requirements note: performance priority = accuracy-first. "
-            "Prefer higher relevance/quality settings when trade-offs are required."
-        )
-    return (
-        "Requirements note: performance priority = balanced. "
-        "Use balanced speed-vs-relevance defaults."
-    )
 
 
 def _build_semantic_query_pattern_preference_note(profile: str) -> str:
@@ -1022,8 +930,8 @@ def _clear_orchestrator_sample_state(state: SessionState) -> None:
 
 def _reset_session_state(state: SessionState) -> None:
     _clear_orchestrator_sample_state(state)
-    state.budget_preference = None
-    state.performance_priority = None
+    state.budget_preference = _BUDGET_OPTION_FLEXIBLE
+    state.performance_priority = _PERFORMANCE_OPTION_BALANCED
     state.model_deployment_preference = None
     state.prefix_wildcard_enabled = None
     state.hybrid_weight_profile = None
@@ -1222,20 +1130,6 @@ def _iter_context_note_entries(state: SessionState) -> list[tuple[str, str]]:
             (_NATURAL_LANGUAGE_CONCEPT_SEARCH_NOTE_PREFIX, _NATURAL_LANGUAGE_CONCEPT_SEARCH_NOTE)
         )
 
-    if state.budget_preference:
-        entries.append(
-            (
-                _BUDGET_PREFERENCE_NOTE_PREFIX,
-                _build_budget_preference_note(state.budget_preference),
-            )
-        )
-    if state.performance_priority:
-        entries.append(
-            (
-                _PERFORMANCE_PREFERENCE_NOTE_PREFIX,
-                _build_performance_preference_note(state.performance_priority),
-            )
-        )
     if state.inferred_text_search_required and state.hybrid_weight_profile:
         entries.append(
             (
@@ -1752,53 +1646,11 @@ async def main():
                         state.inferred_semantic_text_fields = _infer_semantic_text_fields(parsed_sample_doc)
                         state.inferred_text_search_required = bool(state.inferred_semantic_text_fields)
 
-                if state.budget_preference is None:
-                    state.budget_preference = _infer_budget_preference_from_text(raw_user_input)
-                if state.performance_priority is None:
-                    state.performance_priority = _infer_performance_priority_from_text(raw_user_input)
+                state.budget_preference = _BUDGET_OPTION_FLEXIBLE
+                state.performance_priority = _PERFORMANCE_OPTION_BALANCED
                 if state.prefix_wildcard_enabled is None:
                     state.prefix_wildcard_enabled = _infer_prefix_wildcard_preference_from_text(
                         raw_user_input
-                    )
-                if state.budget_preference is None:
-                    state.budget_preference = read_single_choice_input(
-                        title="Budget Preference",
-                        prompt=(
-                            "Choose budget/cost preference for this solution."
-                        ),
-                        options=[
-                            (
-                                _BUDGET_OPTION_FLEXIBLE,
-                                "No strict budget constraints (flexible)",
-                            ),
-                            (
-                                _BUDGET_OPTION_COST_SENSITIVE,
-                                "Cost-sensitive (prioritize cost-effectiveness)",
-                            ),
-                        ],
-                        default_value=_BUDGET_OPTION_FLEXIBLE,
-                    )
-                if state.performance_priority is None:
-                    state.performance_priority = read_single_choice_input(
-                        title="Performance Priority",
-                        prompt=(
-                            "Choose the primary speed-vs-accuracy priority."
-                        ),
-                        options=[
-                            (
-                                _PERFORMANCE_OPTION_SPEED,
-                                "Speed-first",
-                            ),
-                            (
-                                _PERFORMANCE_OPTION_BALANCED,
-                                "Balanced",
-                            ),
-                            (
-                                _PERFORMANCE_OPTION_ACCURACY,
-                                "Accuracy-first",
-                            ),
-                        ],
-                        default_value=_PERFORMANCE_OPTION_BALANCED,
                     )
                 if (
                     state.prefix_wildcard_enabled is None
@@ -1830,8 +1682,6 @@ async def main():
                     query_pattern = _QUERY_PATTERN_OPTION_BALANCED
 
                 engine.set_preferences(
-                    budget=str(state.budget_preference or _BUDGET_OPTION_FLEXIBLE),
-                    performance=str(state.performance_priority or _PERFORMANCE_OPTION_BALANCED),
                     query_pattern=query_pattern,
                     deployment_preference=str(state.model_deployment_preference or ""),
                 )

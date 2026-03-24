@@ -46,8 +46,6 @@ def test_engine_workflow_it_handles_noisy_planner_outputs(monkeypatch) -> None:
     assert "imdb.title.basics.tsv" in load_result["status"]
 
     preferences = engine.set_preferences(
-        budget="flexible",
-        performance="balanced",
         query_pattern="balanced",
         deployment_preference="sagemaker-endpoint",
     )
@@ -234,8 +232,6 @@ def test_engine_set_preferences_treats_semantic_as_not_applicable_for_non_text_s
     assert load_result["inferred_text_fields"] == []
 
     preferences = engine.set_preferences(
-        budget="cost-sensitive",
-        performance="speed-first",
         query_pattern="balanced",
         deployment_preference="sagemaker-endpoint",
     )

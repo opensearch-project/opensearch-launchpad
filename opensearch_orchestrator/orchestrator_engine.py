@@ -476,7 +476,7 @@ class OrchestratorEngine:
             search_quality_summary: Human-readable summary of search quality findings.
             issues: Identified issues or gaps in the current setup.
             suggested_preferences: Optional dict of recommended set_preferences args
-                (budget, performance, query_pattern, deployment_preference) for a restart.
+                (query_pattern, deployment_preference) for a restart.
             metrics: Optional data-driven evaluation metrics dict from compute_evaluation_metrics.
             improvement_suggestions: Optional structured improvement suggestions for restart context.
 

@@ -139,7 +139,7 @@ User <-> Kiro Agent <-> MCP Protocol <-> mcp_server.py <-> OrchestratorEngine
 | Phase | Tools | Description |
 |-------|-------|-------------|
 | 1. Collect Sample | `load_sample` | Load sample doc (IMDB, file, URL, index, paste) |
-| 2. Preferences | `set_preferences` | Performance priority, query pattern |
+| 2. Preferences | `set_preferences` | Query pattern, deployment preference |
 | 3. Plan | `start_planning`, `refine_plan`, `finalize_plan` | Architecture proposal |
 | 4. Execute | `execute_plan`, `retry_execution` | Create index, models, pipelines, UI |
 | 4.5. Evaluate | `start_evaluation` | Optional search quality evaluation |

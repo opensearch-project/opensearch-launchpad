@@ -141,7 +141,7 @@ Ask the user whether they want to process the entire document or specific page r
 
 ### Phase 2 — Gather Preferences
 
-Ask the user **one at a time**: query pattern (keyword, semantic, hybrid, agentic) and performance priority. Skip questions that don't apply.
+Ask the user **one at a time**: query pattern (keyword, semantic, hybrid, agentic) and deployment preference. Skip questions that don't apply.
 
 ### Phase 3 — Plan
 

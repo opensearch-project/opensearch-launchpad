@@ -134,8 +134,6 @@ Use the opensearch-launchpad MCP tools to guide the user from requirements to a 
 
 ### Phase 2: Gather Preferences
 - Ask one preference question at a time, in this order:
-  - **Budget**: flexible or cost-sensitive
-  - **Performance priority**: speed-first, balanced, or accuracy-first
   - If `text_search_required=true`, ask **Query pattern**: mostly-exact (like "Carmencita 1894"),
     mostly-semantic (like "early silent films about dancers"), or balanced (mix of both).
 - Use the client user-input UI for each question (fixed options only, not free-text).
@@ -145,7 +143,7 @@ Use the opensearch-launchpad MCP tools to guide the user from requirements to a 
 - If `text_search_required=false`, do not ask query-pattern or deployment-preference questions.
   Keep planning numeric/filter/aggregation-first and do not suggest changing or enriching data
   solely to force semantic search unless the user explicitly asks for semantic search.
-- Call `set_preferences(budget, performance, query_pattern, deployment_preference)` with the collected values.
+- Call `set_preferences(query_pattern, deployment_preference)` with the collected values.
 
 ### Phase 3: Plan
 - Call `start_planning()` to get an initial architecture proposal from the client LLM planner.
@@ -1624,17 +1622,13 @@ def load_sample(
 
 @mcp.tool()
 def set_preferences(
-    budget: str = "flexible",
-    performance: str = "balanced",
     query_pattern: str = "balanced",
     deployment_preference: str = "",
 ) -> dict:
-    """Set user preferences for budget, performance, query pattern, and deployment.
+    """Set user preferences for query pattern and deployment.
     Call this after load_sample and before start_planning.
 
     Args:
-        budget: "flexible" or "cost-sensitive".
-        performance: "speed-first", "balanced", or "accuracy-first".
         query_pattern: "mostly-exact", "balanced", or "mostly-semantic".
         deployment_preference: "opensearch-node", "sagemaker-endpoint", or
             "external-embedding-api". Used when query_pattern is
@@ -1644,8 +1638,6 @@ def set_preferences(
         dict confirming stored preferences and generated context notes.
     """
     result = _engine.set_preferences(
-        budget=budget,
-        performance=performance,
         query_pattern=query_pattern,
         deployment_preference=deployment_preference,
     )
