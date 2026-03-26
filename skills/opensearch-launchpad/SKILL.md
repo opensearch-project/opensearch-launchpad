@@ -230,11 +230,17 @@ Present the plan and wait for user approval.
 
 ### Phase 4 — Execute
 
-Execute the approved plan step by step using `opensearch_ops.py` commands: create index, deploy model, create pipeline, index documents, launch UI. Run `opensearch_ops.py --help` for the full command reference.
+Execute the approved plan step by step using `opensearch_ops.py` commands: create index, deploy model, create pipeline, index documents, launch UI. Run `opensearch_ops.py --help` for the full command reference. When launching the UI, always present the URL (default: `http://127.0.0.1:8765`) to the user so they can click to open the Search Builder in their browser.
+
+After the UI is running, present the next steps:
+> "Your search app is live! Here's what you can do next:"
+> 1. **Evaluate search quality** (Phase 4.5) — I'll run test queries, measure relevance metrics (nDCG, precision, MRR), and suggest improvements.
+> 2. **Deploy to AWS** (Phase 5) — Provision an Amazon OpenSearch cluster and deploy your search setup.
+> 3. **Done for now** — Keep experimenting with the Search Builder UI.
 
 ### Phase 4.5 — Evaluate (Optional)
 
-After successful execution, offer to evaluate search quality. Read `references/knowledge/evaluation_guide.md` for the evaluation methodology. Use `opensearch_ops.py search` to run test queries. If evaluation suggests improvements, offer to restart from Phase 3 with updated preferences.
+If the user chooses to evaluate search quality, read and follow `references/knowledge/evaluation_guide.md` for the full methodology. If HIGH severity findings exist, offer to restart from Phase 3 with a specific fix.
 
 ### Phase 5 — Deploy to AWS (Optional)
 

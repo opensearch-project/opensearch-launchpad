@@ -9,71 +9,159 @@ Offer evaluation after Phase 4 completes successfully:
 
 If the user declines, skip to Phase 5.
 
-## Evaluation Config
+## Evaluation Workflow
 
-The evaluation is driven by a JSON config that defines test queries, expected relevance grades, and methods to compare. Methods are dynamically determined by the previous phase -- whatever search strategies were set up (BM25, hybrid, dense vector, sparse, etc.) become the methods under test.
+### Step 1: Generate Test Queries
 
+**Option A — UI server is running (preferred):**
+
+Call the suggestions endpoint. It returns test queries with capabilities already assigned from the search configuration in Phase 4:
+
+```
+GET http://127.0.0.1:8765/api/suggestions?index=<index>
+```
+
+Response:
 ```json
 {
-  "index": "my-index",
-  "model": "sentence-transformers/all-MiniLM-L6-v2",
-  "bm25_fields": ["title^4", "text^2"],
-  "embedding_field": "combined_embedding",
-  "embedded_fields": "title + text",
-  "title_field": "primaryTitle",
-  "k": 5,
-  "methods": [
-    {"name": "Hybrid", "mode": "hybrid", "tag": "hybrid"},
-    {"name": "BM25", "mode": "bm25", "tag": "lexical"},
-    {"name": "KNN", "mode": "knn", "tag": "vector"}
+  "suggestions": [
+    {"text": "The Godfather", "capability": "exact", "query_mode": "TERM", ...},
+    {"text": "director:Frank Darabont", "capability": "structured", "query_mode": "FILTER", ...},
+    ...
   ],
-  "tests": [
-    {
-      "name": "Q1: Exact title lookup",
-      "type": "exact",
-      "query": "The Matrix",
-      "relevance": {"The Matrix": 3, "The Matrix Reloaded": 2}
-    },
-    {
-      "name": "Q2: Semantic concept query",
-      "type": "semantic",
-      "query": "movies about artificial intelligence",
-      "relevance": {"The Matrix": 3, "Ex Machina": 3, "A.I.": 2}
-    }
-  ]
+  "sample_docs": [...],
+  "has_semantic": true,
+  "index": "my-index"
 }
 ```
 
-### Config Fields
+Use the `suggestions` list directly as test queries.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `index` | Yes | OpenSearch index name |
-| `model` | Yes | SentenceTransformer model for embedding queries |
-| `bm25_fields` | Yes | Fields for BM25 multi_match (with optional boosts) |
-| `embedding_field` | No | KNN vector field name (default: `combined_embedding`) |
-| `title_field` | No | Field used to match relevance judgments (default: `title`) |
-| `k` | No | Cutoff depth for metrics (default: `5`) |
-| `methods` | No | List of methods to evaluate (default: HYBRID/BM25/KNN) |
-| `tests` | Yes | Test queries with graded relevance judgments |
+**Option B — UI server is not running:**
 
-### Method Config
+Ask the user to provide test queries. The agent assigns a capability to each query based on its form:
 
-Each method has:
-- `name`: Display name (any string)
-- `mode`: Search mode (`bm25`, `knn`, `hybrid`) for the CLI
-- `tag` (optional): Category for smarter diagnosis -- `lexical`, `vector`, `hybrid`, `sparse`, `combined`
+| Capability | How to detect | Example |
+|-----------|---------------|---------|
+| `exact` | Matches a known title/name in the data | `The Matrix` |
+| `structured` | Contains `field:value` syntax | `genres:Drama` |
+| `combined` | Free text + `field:value` | `space adventure genres:Sci-Fi` |
+| `autocomplete` | Short prefix (< 5 chars or partial word) | `The Ma` |
+| `fuzzy` | Contains apparent misspelling | `Teh Matrx` |
+| `semantic` | Natural language describing a concept | `movies about redemption in prison` |
 
-Methods are not limited to three. Add as many as the setup requires.
+### Step 2: Batch Search
 
-### Relevance Grades
+Run **all** queries through the search pipeline in a single call using `evaluate_search_results`. This runs every query through `search_ui_search` (the real pipeline from Phase 4) and returns results for the agent to judge:
 
-| Grade | Meaning |
-|-------|---------|
-| 3 | Perfect -- this is the ideal result for this query |
-| 2 | Relevant -- clearly useful to the searcher |
-| 1 | Marginal -- related but not what was intended |
-| 0 | Irrelevant (default for unlisted documents) |
+```bash
+uv run python -c "
+import sys, json; sys.path.insert(0, 'scripts')
+from opensearchpy import OpenSearch
+from lib.evaluate import evaluate_search_results
+client = OpenSearch(hosts=[{'host': 'localhost', 'port': 9200}], use_ssl=False, verify_certs=False)
+result = evaluate_search_results(client, '<index>', title_field='<title_field>', k=5)
+print(json.dumps(result['queries'], indent=2))
+"
+```
+
+Output — one entry per query with all results:
+```json
+[
+  {"query": "The Godfather", "capability": "exact", "results": [
+    {"title": "The Godfather", "score": 1.28},
+    {"title": "The Matrix", "score": 0.40}, ...
+  ]},
+  {"query": "director:Frank Darabont", "capability": "structured", "results": [
+    {"title": "The Shawshank Redemption", "score": 1.91}
+  ]},
+  ...
+]
+```
+
+This is **one command, one approval** — no per-query back-and-forth.
+
+### Step 3: Judge Relevance
+
+For each query, the agent reviews the returned documents and assigns a relevance grade to each query-document pair. Grade every document in the top-k results — do not skip any.
+
+**Grading scale:**
+
+| Grade | Label | Criteria |
+|-------|-------|----------|
+| 3 | Perfect | The document is exactly what a user searching this query would want. For exact queries, the title matches. For semantic queries, the document directly addresses the concept. |
+| 2 | Relevant | The document is clearly useful and related to the query intent, but is not the ideal result. For example, a sequel when the user searched for the original. |
+| 1 | Marginal | The document shares a topic, genre, or keyword with the query but does not satisfy the search intent. A loose thematic connection. |
+| 0 | Irrelevant | The document has no meaningful connection to the query. This is the default for unlisted documents. |
+
+**Judgment prompt — for each query-document pair, evaluate:**
+
+1. **Intent match**: What is the user trying to find with this query? Does this document satisfy that intent?
+2. **Content relevance**: How well does the document's content relate to the query, regardless of how the query was issued? A document about prison redemption is relevant to "movies about redemption in prison" whether the query came from a keyword search, semantic search, or a structured filter.
+3. **Would a real user click this?** If yes, grade >= 2. If maybe, grade 1. If no, grade 0.
+
+**Example judgment for query `"movies about redemption in prison"`:**
+
+| Document | Grade | Reasoning |
+|----------|-------|-----------|
+| The Shawshank Redemption | 3 | Directly about redemption and prison — perfect match |
+| Pulp Fiction | 1 | Contains themes of redemption but not about prison |
+| Interstellar | 0 | Space exploration — no connection to prison or redemption |
+
+Also judge documents that **should** appear but are missing from results — these feed into Rule 5 (missed relevant docs). Include them in the `relevance` dict even if they weren't returned.
+
+### Step 4: Compute Metrics and Diagnose
+
+Pass the relevance judgments from Step 3 together with the cached search results from Step 2 into `evaluate_index`. This reuses the search results — no queries are re-run:
+
+```bash
+uv run python -c "
+import sys, json; sys.path.insert(0, 'scripts')
+from opensearchpy import OpenSearch
+from lib.evaluate import evaluate_search_results, evaluate_index
+client = OpenSearch(hosts=[{'host': 'localhost', 'port': 9200}], use_ssl=False, verify_certs=False)
+search_results = evaluate_search_results(client, '<index>', title_field='<title_field>', k=5)
+report = evaluate_index(
+    search_results=search_results,
+    relevance_overrides={
+        'The Godfather': {'The Godfather': 3, 'Goodfellas': 1},
+        'director:Frank Darabont': {'The Shawshank Redemption': 3},
+    },
+)
+print(report)
+"
+```
+
+If Step 2 was not run separately, `evaluate_index` can also run searches from scratch:
+
+```python
+report = evaluate_index(
+    client, index_name, title_field="title", k=5,
+    relevance_overrides={...},
+)
+```
+
+### Step 5: Present Results
+
+**Always present the output of `format_report()` (or `evaluate_index()`) directly to the user.** Do not reformat, summarize, or rearrange the report. The report has a fixed schema with these sections in order:
+
+1. **Header** — index name, methods, k, query count
+2. **Per-query detail** — for each query: relevance labels, per-method star rating + nDCG/P@k/MRR, ranked document list with scores, grades, and DCG contributions
+3. **nDCG table** — all queries × methods in a single table with MEAN row
+4. **Summary** — mean metrics per method with visual bar
+5. **Per-type breakdown** — mean nDCG grouped by query capability
+6. **Findings & recommendations** — grouped by tag, sorted by severity, with recommended next action
+7. **Completion check** — pass/fail against target thresholds
+
+This schema is produced by `format_report()` in `evaluate.py`. Present it as a code block so formatting is preserved:
+
+````
+```
+<output of evaluate_index() or format_report()>
+```
+````
+
+After the report, add a brief summary (2-3 sentences) highlighting the key takeaway and suggested next step.
 
 ## Metrics
 
@@ -144,33 +232,9 @@ The evaluation passes if **any** of:
 - All findings are LOW severity only
 - No HIGH severity findings and setup matches the use case
 
-## Running Evaluation
-
-### CLI
-```bash
-uv run --with opensearch-py --with sentence-transformers \
-    python scripts/evaluate.py --config path/to/config.json --k 5
-```
-
-### As library (from other scripts or the agent)
-```python
-from lib.evaluate import evaluate_results, format_report
-
-report = evaluate_results(
-    tests=tests,
-    results_by_method={"Hybrid": [resp1, ...], "BM25": [resp1, ...]},
-    k=5,
-    title_field="primaryTitle",
-    method_tags={"Hybrid": "hybrid", "BM25": "lexical"},
-)
-print(format_report(report, config={"index": "my-index"}))
-```
-
-The `results_by_method` dict accepts pre-computed OpenSearch search responses, so callers can use any search mechanism (SentenceTransformer, neural search pipeline, custom queries, etc.).
-
 ## After Evaluation
 
-- If HIGH findings exist, offer to restart from Phase 3 with updated preferences:
-  > "Based on the evaluation, I suggest [specific fix]. Would you like to restart with updated preferences?"
-- If only LOW findings, proceed to Phase 5.
-- If the user wants to iterate, update the config and re-run.
+- If HIGH findings exist, offer to restart from Phase 3 with a specific fix:
+  > "Based on the evaluation, [specific finding]. I suggest [specific fix]. Would you like to restart with updated preferences?"
+- If only LOW findings, the setup is acceptable -- proceed to Phase 5.
+- If the user wants to iterate, re-run with updated search configuration.

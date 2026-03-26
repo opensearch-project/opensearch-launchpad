@@ -16,11 +16,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .client import create_client, can_connect, build_client, resolve_http_auth
+from .client import create_client, can_connect
 from .search import (
     autocomplete,
     extract_index_field_specs,
     generate_suggestions,
+    detect_index_profile,
     search_ui_search,
 )
 
@@ -35,6 +36,7 @@ _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
+    ".jsx": "application/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
     ".svg": "image/svg+xml",
 }
@@ -125,13 +127,16 @@ class _UIHandler(BaseHTTPRequestHandler):
             index_name = (params.get("index") or [""])[0] or _default_index
             try:
                 client = _get_client()
-                suggestions = generate_suggestions(client, index_name, max_count=6)
-                self._send_json({
-                    "suggestions": suggestions,
+                gen = generate_suggestions(client, index_name, max_count=8)
+                result = {
+                    "suggestions": gen.get("suggestions", []),
+                    "sample_docs": gen.get("sample_docs", []),
+                    "has_semantic": gen.get("has_semantic", False),
                     "index": index_name,
-                })
+                }
+                self._send_json(result)
             except Exception as e:
-                self._send_json({"suggestions": [], "index": index_name, "error": str(e)})
+                self._send_json({"suggestions": [], "sample_docs": [], "has_semantic": False, "index": index_name, "error": str(e)})
             return
 
         # Autocomplete
@@ -156,6 +161,21 @@ class _UIHandler(BaseHTTPRequestHandler):
                     "index": index_name, "prefix": prefix_text,
                     "field": "", "options": [], "error": str(e),
                 })
+            return
+
+        # Schema / template detection
+        if parsed.path == "/api/schema":
+            index_name = (params.get("index") or [""])[0] or _default_index
+            if not index_name:
+                self._send_json({"error": "No index specified."}, 400)
+                return
+            try:
+                client = _get_client()
+                schema = detect_index_profile(client, index_name)
+                schema["index"] = index_name
+                self._send_json(schema)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
             return
 
         # Search API
@@ -276,6 +296,24 @@ def _get_backend_info() -> dict:
     return {"backend_type": "local", "endpoint": endpoint, "connected": connected}
 
 
+def _kill_existing_ui() -> None:
+    """Kill any existing process listening on the UI port."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{SEARCH_UI_PORT}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = result.stdout.strip().split()
+        for pid in pids:
+            if pid.isdigit() and int(pid) != os.getpid():
+                os.kill(int(pid), signal.SIGTERM)
+        if pids:
+            time.sleep(0.5)
+    except Exception:
+        pass
+
+
 def launch_ui(index_name: str = "") -> str:
     global _default_index
     if index_name:
@@ -286,6 +324,9 @@ def launch_ui(index_name: str = "") -> str:
             f"Error: Search UI static directory not found at {SEARCH_UI_STATIC_DIR}. "
             "Make sure you cloned the full opensearch-launchpad repository."
         )
+
+    # Kill any existing UI server on the same port
+    _kill_existing_ui()
 
     try:
         server = ThreadingHTTPServer((SEARCH_UI_HOST, SEARCH_UI_PORT), _UIHandler)

@@ -157,19 +157,24 @@ def _resolve_semantic_runtime_hints(
     client: OpenSearch, index_name: str, field_specs: dict[str, dict[str, str]]
 ) -> dict[str, str]:
     vector_fields = [
-        field for field, spec in field_specs.items()
-        if spec.get("type") == "knn_vector"
+        (field, spec.get("type"))
+        for field, spec in field_specs.items()
+        if spec.get("type") in ("knn_vector", "rank_features")
     ]
     vector_field = ""
+    has_sparse = False
     if vector_fields:
         preferred = sorted(
             vector_fields,
             key=lambda item: (
-                0 if ("embedding" in item.lower() or "vector" in item.lower()) else 1,
-                len(item), item,
+                # Prefer dense over sparse when both exist
+                0 if item[1] == "knn_vector" else 1,
+                0 if ("embedding" in item[0].lower() or "vector" in item[0].lower()) else 1,
+                len(item[0]), item[0],
             ),
         )
-        vector_field = preferred[0]
+        vector_field = preferred[0][0]
+        has_sparse = preferred[0][1] == "rank_features"
 
     default_pipeline = ""
     search_pipeline = ""
@@ -188,14 +193,22 @@ def _resolve_semantic_runtime_hints(
     except Exception:
         pass
 
+    has_neural_search_pipeline = False
+
     if search_pipeline:
         try:
             pipeline_response = client.transport.perform_request("GET", f"/_search/pipeline/{search_pipeline}")
             pipeline = pipeline_response.get(search_pipeline, {})
             for processor in pipeline.get("request_processors", []):
-                if isinstance(processor, dict) and "agentic_query_translator" in processor:
-                    has_agentic_pipeline = True
-                    break
+                if isinstance(processor, dict):
+                    if "agentic_query_translator" in processor:
+                        has_agentic_pipeline = True
+                    if "neural_query_enricher" in processor:
+                        has_neural_search_pipeline = True
+            # normalization-processor in phase_results_processors also indicates neural search
+            for processor in pipeline.get("phase_results_processors", []):
+                if isinstance(processor, dict) and "normalization-processor" in processor:
+                    has_neural_search_pipeline = True
         except Exception:
             pass
 
@@ -206,7 +219,10 @@ def _resolve_semantic_runtime_hints(
             for processor in pipeline.get("processors", []):
                 if not isinstance(processor, dict):
                     continue
-                embedding = processor.get("text_embedding")
+                # Support both text_embedding (dense) and sparse_encoding (sparse)
+                embedding = processor.get("text_embedding") or processor.get("sparse_encoding")
+                if processor.get("sparse_encoding") and not vector_fields:
+                    has_sparse = True
                 if not isinstance(embedding, dict):
                     continue
                 candidate_model = normalize_text(embedding.get("model_id", ""))
@@ -238,6 +254,8 @@ def _resolve_semantic_runtime_hints(
         "default_pipeline": default_pipeline,
         "search_pipeline": search_pipeline,
         "has_agentic_pipeline": str(has_agentic_pipeline).lower(),
+        "has_neural_search_pipeline": str(has_neural_search_pipeline).lower(),
+        "has_sparse": str(has_sparse).lower(),
     }
 
 
@@ -265,6 +283,13 @@ def _build_neural_clause(query: str, vector_field: str, model_id: str, size: int
             }
         }
     }
+
+
+def _build_neural_sparse_clause(query: str, vector_field: str, model_id: str = "") -> dict:
+    clause: dict = {"query_text": query}
+    if model_id:
+        clause["model_id"] = model_id
+    return {"neural_sparse": {vector_field: clause}}
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +405,31 @@ def _suggestion_candidates_from_doc(source: dict) -> list[str]:
     return [text for _, text in scored]
 
 
+def _is_vector_value(v: object) -> bool:
+    """Return True if *v* looks like a dense or sparse embedding vector."""
+    if isinstance(v, list) and len(v) >= 16:
+        # Dense vector: list of 16+ numbers
+        sample = v[:8]
+        if all(isinstance(x, (int, float)) for x in sample):
+            return True
+    if isinstance(v, dict) and len(v) >= 16:
+        # Sparse vector: dict with string keys and numeric values
+        # Covers both numeric-key sparse vectors and neural sparse
+        # token-weight vectors (e.g. {"movie": 0.33, "comedy": 0.12})
+        sample = list(v.items())[:8]
+        if all(
+            isinstance(k, str) and isinstance(val, (int, float))
+            for k, val in sample
+        ):
+            return True
+    return False
+
+
+def _strip_vector_fields(source: dict) -> dict:
+    """Return a shallow copy of *source* with embedding/vector fields removed."""
+    return {k: v for k, v in source.items() if not _is_vector_value(v)}
+
+
 def preview_text(source: dict) -> str:
     candidates = _suggestion_candidates_from_doc(source)
     if candidates:
@@ -394,35 +444,163 @@ def preview_text(source: dict) -> str:
     return "(No preview text)"
 
 
-def generate_suggestions(client: OpenSearch, index_name: str, max_count: int = 6) -> list[str]:
-    deduped: list[str] = []
+def generate_suggestions(
+    client: OpenSearch, index_name: str, max_count: int = 8,
+) -> dict:
+    """Generate diverse suggestions with capability/query_mode metadata.
+
+    Returns a dict with:
+        - suggestions: list of programmatic test queries (exact, structured,
+          autocomplete, fuzzy, combined). Semantic queries are NOT included —
+          the agent should craft those from the sample_docs.
+        - sample_docs: list of sample documents (vector fields stripped) for
+          the agent to use when crafting semantic test queries.
+        - has_semantic: whether the index supports semantic/hybrid search.
+    """
+    empty = {"suggestions": [], "sample_docs": [], "has_semantic": False}
+    if not index_name:
+        return empty
+
+    field_specs = extract_index_field_specs(client, index_name)
+    runtime_hints = _resolve_semantic_runtime_hints(client, index_name, field_specs)
+    has_semantic = bool(
+        (runtime_hints.get("vector_field") and runtime_hints.get("model_id"))
+        or runtime_hints.get("has_neural_search_pipeline", "false") == "true"
+    )
+
+    # Categorise fields
+    text_fields, keyword_fields, numeric_fields = [], [], []
+    # Track text fields that have .keyword sub-fields (filterable)
+    filterable_fields = []
+    for name, spec in field_specs.items():
+        ftype = spec.get("type", "")
+        if ftype == "text" and not name.endswith(".keyword"):
+            text_fields.append(name)
+            # Check if this text field has a .keyword sub-field
+            if f"{name}.keyword" in field_specs:
+                filterable_fields.append(name)
+        elif ftype in _KEYWORD_FIELD_TYPES and not name.endswith(".keyword"):
+            keyword_fields.append(name)
+            filterable_fields.append(name)
+        elif ftype in _NUMERIC_FIELD_TYPES:
+            numeric_fields.append(name)
+
+    # Sample a few documents
+    try:
+        response = client.search(
+            index=index_name,
+            body={"size": 20, "query": {"match_all": {}}},
+        )
+        docs = [h.get("_source", {}) for h in response.get("hits", {}).get("hits", [])]
+    except Exception:
+        docs = []
+
+    if not docs:
+        return empty
+
+    # Strip vector fields from sample docs for agent readability
+    sample_docs = [_strip_vector_fields(doc) for doc in docs]
+
+    meta: list[dict] = []
     seen: set[str] = set()
 
-    def _append(text_value: object) -> None:
-        text = normalize_text(text_value)
-        if not text:
-            return
-        key = text.lower()
-        if key in seen:
+    def _add(text: str, capability: str, query_mode: str, field: str = ""):
+        key = text.lower().strip()
+        if key in seen or not key:
             return
         seen.add(key)
-        deduped.append(text)
+        meta.append({
+            "text": text.strip(),
+            "capability": capability,
+            "query_mode": query_mode,
+            "field": field,
+            "value": "",
+            "case_insensitive": False,
+        })
 
-    if index_name:
-        try:
-            response = client.search(
-                index=index_name,
-                body={"size": max_count * 4, "query": {"match_all": {}}},
-            )
-            for hit in response.get("hits", {}).get("hits", []):
-                source = hit.get("_source", {})
-                for suggestion in _suggestion_candidates_from_doc(source):
-                    _append(suggestion)
-                    if len(deduped) >= max_count:
-                        return deduped
-        except Exception:
-            pass
-    return deduped[:max_count]
+    # Resolve title fields early (used by exact, structured, and other sections)
+    title_fields = [f for f in text_fields if any(h in f.lower() for h in ("title", "name", "label"))]
+    title_set = set(f.lower() for f in (title_fields or []))
+
+    # 1. Exact match — title/name value
+    if title_fields:
+        for doc in docs[1:6]:
+            val = str(doc.get(title_fields[0], "")).strip()
+            if 3 < len(val) < 100:
+                _add(val, "exact", "TERM")
+                break
+
+    # 2. Structured — filterable field:value
+    filter_candidates = [f for f in filterable_fields if f.lower() not in title_set]
+    if not filter_candidates and numeric_fields:
+        filter_candidates = numeric_fields[:2]
+    if filter_candidates:
+        for doc in docs[:10]:
+            for kf in filter_candidates:
+                val = doc.get(kf)
+                if val is None:
+                    continue
+                val_str = str(val).strip()
+                if val_str and len(val_str) < 60:
+                    _add(f"{kf}:{val_str}", "structured", "FILTER", field=kf)
+                    break
+            if sum(1 for m in meta if m["capability"] == "structured") >= 1:
+                break
+
+    # 3. Combined — text + filter (semantic + structured)
+    if has_semantic and filter_candidates and title_fields:
+        for doc in docs[3:10]:
+            title_val = str(doc.get(title_fields[0], "")).strip()
+            for kf in filter_candidates:
+                kf_val = doc.get(kf)
+                if kf_val is None:
+                    continue
+                kf_val_str = str(kf_val).strip()
+                if title_val and kf_val_str and len(kf_val_str) < 40:
+                    words = title_val.split()[:3]
+                    _add(f"{' '.join(words)} {kf}:{kf_val_str}", "combined", "HYBRID+FILTER")
+                    break
+            if sum(1 for m in meta if m["capability"] == "combined") >= 1:
+                break
+
+    # 4. Autocomplete — prefix of a title/name
+    if title_fields:
+        for doc in docs[2:8]:
+            val = str(doc.get(title_fields[0], "")).strip()
+            if len(val) > 5:
+                prefix = val[:max(4, len(val) // 3)]
+                _add(prefix, "autocomplete", "PREFIX", field=title_fields[0])
+                break
+
+    # 5. Fuzzy — intentional slight misspelling of a title
+    if title_fields:
+        for doc in docs[4:10]:
+            val = str(doc.get(title_fields[0], "")).strip()
+            words = val.split()
+            if words and len(words[0]) > 4:
+                # Swap two middle characters to create a typo
+                w = words[0]
+                mid = len(w) // 2
+                fuzzy_word = w[:mid-1] + w[mid] + w[mid-1] + w[mid+1:]
+                rest = " ".join(words[1:])
+                fuzzy_text = f"{fuzzy_word} {rest}".strip() if rest else fuzzy_word
+                _add(fuzzy_text, "fuzzy", "FUZZY")
+                break
+
+    # 6. Another exact if we have room
+    if title_fields and len(meta) < max_count:
+        for doc in docs[5:12]:
+            val = str(doc.get(title_fields[0], "")).strip()
+            if 3 < len(val) < 100:
+                _add(val, "exact", "TERM")
+                if sum(1 for m in meta if m["capability"] == "exact") >= 2:
+                    break
+
+    return {
+        "suggestions": meta[:max_count],
+        "sample_docs": sample_docs,
+        "has_semantic": has_semantic,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -463,11 +641,11 @@ def _resolve_autocomplete_fields(
     def _rank(field_name: str) -> tuple[int, int, str]:
         return (field_name.count("."), len(field_name), field_name)
 
-    for field_name in sorted(keyword_fields, key=_rank):
+    for field_name in sorted(text_fields, key=_rank):
         _append(field_name)
         if len(selected) >= max(1, limit):
             return selected
-    for field_name in sorted(text_fields, key=_rank):
+    for field_name in sorted(keyword_fields, key=_rank):
         _append(field_name)
         if len(selected) >= max(1, limit):
             return selected
@@ -535,7 +713,7 @@ def autocomplete(
             return {"index": target_index, "prefix": prefix, "field": "", "options": [],
                     "error": "No suitable autocomplete fields found."}
 
-        should_clauses = [{"prefix": {f: {"value": prefix}}} for f in fields]
+        should_clauses = [{"prefix": {f: {"value": prefix.lower(), "case_insensitive": True}}} for f in fields]
         body = {
             "size": max(effective_size * 8, 24),
             "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
@@ -555,7 +733,7 @@ def autocomplete(
                     raw_values = _extract_values_from_source_by_path(source, variant)
                     for raw_value in raw_values:
                         candidate = normalize_text(raw_value)
-                        if not candidate or not candidate.lower().startswith(prefix_lower):
+                        if not candidate or len(candidate) > 100 or not candidate.lower().startswith(prefix_lower):
                             continue
                         key = candidate.lower()
                         if key in seen:
@@ -614,7 +792,9 @@ def search_ui_search(
         vector_field = runtime_hints.get("vector_field", "")
         model_id = runtime_hints.get("model_id", "")
         has_agentic_pipeline = runtime_hints.get("has_agentic_pipeline", "false") == "true"
-        semantic_ready = bool(vector_field and model_id)
+        has_sparse = runtime_hints.get("has_sparse", "false") == "true"
+        has_neural_search_pipeline = runtime_hints.get("has_neural_search_pipeline", "false") == "true"
+        semantic_ready = bool(vector_field and (model_id or (has_sparse and has_neural_search_pipeline)))
         lexical_query = _build_default_lexical_query(query=query, fields=lexical_fields)
 
         # Agentic search for complex queries
@@ -652,13 +832,16 @@ def search_ui_search(
             }
             query_mode = "structured_filter"
         elif semantic_ready:
-            # Hybrid search: combine BM25 + neural
-            neural_query = _build_neural_clause(query, vector_field, model_id, size)
+            # Hybrid search: combine BM25 + neural (dense or sparse)
+            if has_sparse:
+                semantic_query = _build_neural_sparse_clause(query, vector_field)
+            else:
+                semantic_query = _build_neural_clause(query, vector_field, model_id, size)
             executed_body = {
                 "size": size,
                 "query": {
                     "hybrid": {
-                        "queries": [lexical_query, neural_query],
+                        "queries": [lexical_query, semantic_query],
                     }
                 },
             }
@@ -706,6 +889,109 @@ def search_ui_search(
     )
 
 
+def detect_index_profile(client: OpenSearch, index_name: str) -> dict:
+    """Analyze index to detect field categories, capabilities, and suggest a UI template."""
+    field_specs = extract_index_field_specs(client, index_name)
+    runtime_hints = _resolve_semantic_runtime_hints(client, index_name, field_specs)
+
+    text_fields = []
+    keyword_fields = []
+    numeric_fields = []
+    date_fields = []
+    vector_fields = []
+
+    for name, spec in field_specs.items():
+        ftype = spec.get("type", "")
+        if ftype == "text" and not name.endswith(".keyword"):
+            text_fields.append(name)
+        elif ftype in _KEYWORD_FIELD_TYPES and not name.endswith(".keyword"):
+            keyword_fields.append(name)
+        elif ftype in _NUMERIC_FIELD_TYPES:
+            numeric_fields.append(name)
+        elif ftype in ("date", "date_nanos"):
+            date_fields.append(name)
+        elif ftype in ("knn_vector", "rank_features"):
+            vector_fields.append(name)
+
+    has_agentic = runtime_hints.get("has_agentic_pipeline", "false") == "true"
+    has_sparse = runtime_hints.get("has_sparse", "false") == "true"
+    has_neural_search_pipeline = runtime_hints.get("has_neural_search_pipeline", "false") == "true"
+    has_semantic = bool(
+        (runtime_hints.get("vector_field") and (
+            runtime_hints.get("model_id") or (has_sparse and has_neural_search_pipeline)
+        ))
+        or has_neural_search_pipeline
+    )
+
+    capabilities = ["lexical"]
+    if has_semantic:
+        capabilities.insert(0, "semantic")
+    if has_agentic:
+        capabilities.insert(0, "agentic")
+    if keyword_fields or numeric_fields:
+        capabilities.append("structured")
+
+    # Detect image-like fields
+    _image_hints = {"image", "img", "poster", "photo", "thumbnail", "picture", "cover", "avatar", "logo", "icon"}
+    has_image_field = any(
+        any(hint in name.lower() for hint in _image_hints)
+        for name in field_specs
+    )
+
+    # Detect price/cost fields (strong ecommerce signal)
+    _price_hints = {"price", "cost", "msrp", "amount", "discount", "sale_price", "list_price"}
+    has_price_field = any(
+        any(hint in name.lower() for hint in _price_hints)
+        for name in numeric_fields
+    )
+
+    # Detect category/brand fields (ecommerce signal)
+    _ecommerce_hints = {"category", "brand", "sku", "product", "vendor", "manufacturer", "color", "size", "stock", "inventory"}
+    has_ecommerce_field = any(
+        any(hint in name.lower() for hint in _ecommerce_hints)
+        for name in keyword_fields
+    )
+
+    structured_count = len(keyword_fields) + len(numeric_fields) + len(date_fields)
+    # NOTE: agentic-chat and media templates are disabled in the UI for now.
+    # if has_agentic:
+    #     template = "agentic-chat"
+    # elif has_image_field and structured_count >= 2:
+    #     template = "media"
+    if has_price_field or (has_image_field and has_ecommerce_field):
+        template = "ecommerce"
+    elif text_fields or vector_fields:
+        template = "document"
+    else:
+        template = "document"
+
+    # Hide vector/embedding fields from UI-facing field lists
+    _embedding_hints = {"embedding", "vector", "knn", "dense_vector", "rank_features"}
+    _hidden = set(vector_fields)
+    for name in field_specs:
+        if any(h in name.lower() for h in _embedding_hints):
+            _hidden.add(name)
+
+    ui_fields = {n: s["type"] for n, s in field_specs.items() if n not in _hidden}
+    ui_field_specs = {n: s for n, s in field_specs.items() if n not in _hidden}
+
+    return {
+        "fields": ui_fields,
+        "field_specs": ui_field_specs,
+        "field_categories": {
+            "text": [f for f in text_fields if f not in _hidden],
+            "keyword": [f for f in keyword_fields if f not in _hidden],
+            "numeric": [f for f in numeric_fields if f not in _hidden],
+            "date": [f for f in date_fields if f not in _hidden],
+            "vector": vector_fields,
+        },
+        "capabilities": capabilities,
+        "suggested_template": template,
+        "has_semantic": has_semantic,
+        "has_agentic": has_agentic,
+    }
+
+
 def _format_search_response(
     response: dict,
     query_mode: str,
@@ -717,11 +1003,12 @@ def _format_search_response(
     hits_out: list[dict] = []
     for hit in response.get("hits", {}).get("hits", []):
         source = hit.get("_source", {})
+        clean_source = _strip_vector_fields(source)
         hits_out.append({
             "id": hit.get("_id"),
             "score": hit.get("_score"),
             "preview": preview_text(source),
-            "source": source,
+            "source": clean_source,
         })
     result = {
         "error": "",

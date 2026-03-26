@@ -23,8 +23,11 @@ from lib.search import (
     _coerce_structured_value,
     _split_structured_clauses,
     _suggestion_candidates_from_doc,
+    _is_vector_value,
+    _strip_vector_fields,
     preview_text,
     generate_suggestions,
+    detect_index_profile,
     _resolve_autocomplete_fields,
     _source_field_variants,
     _extract_values_from_source_by_path,
@@ -395,6 +398,45 @@ def test_preview_text_non_dict_values():
     assert preview_text(source) == "(No preview text)"
 
 
+def test_generate_suggestions_returns_dicts_with_capability(monkeypatch):
+    client = _FakeClient(search_response={
+        "hits": {
+            "hits": [
+                {"_source": {"title": "The Matrix movie classic", "genre": "Action"}},
+                {"_source": {"title": "Inception is mind bending", "genre": "Sci-Fi"}},
+                {"_source": {"title": "The Godfather classic film", "genre": "Drama"}},
+                {"_source": {"title": "Pulp Fiction great movie", "genre": "Crime"}},
+                {"_source": {"title": "Forrest Gump heartwarming", "genre": "Drama"}},
+                {"_source": {"title": "The Dark Knight rises", "genre": "Action"}},
+            ],
+            "total": {"value": 6},
+        },
+        "took": 1,
+    })
+
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"movies": {"mappings": {"properties": {
+                "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                "genre": {"type": "keyword"},
+            }}}}
+        def get_settings(self, index):
+            return {"movies": {"settings": {"index": {}}}}
+
+    client.indices = _FakeIndices()
+
+    result = generate_suggestions(client, "movies", max_count=6)
+
+    suggestions = result["suggestions"]
+    assert len(suggestions) > 0
+    for s in suggestions:
+        assert isinstance(s, dict)
+        assert "text" in s
+        assert "capability" in s
+        assert s["capability"] in ("exact", "semantic", "structured", "combined", "autocomplete", "fuzzy")
+        assert "query_mode" in s
+
+
 def test_generate_suggestions_returns_deduped(monkeypatch):
     client = _FakeClient(search_response={
         "hits": {
@@ -402,37 +444,50 @@ def test_generate_suggestions_returns_deduped(monkeypatch):
                 {"_source": {"title": "The Matrix movie classic"}},
                 {"_source": {"title": "the matrix movie classic"}},  # duplicate
                 {"_source": {"title": "Inception is mind bending"}},
+                {"_source": {"title": "The Godfather classic film"}},
+                {"_source": {"title": "Pulp Fiction great movie"}},
+                {"_source": {"title": "Forrest Gump heartwarming"}},
             ],
-            "total": {"value": 3},
+            "total": {"value": 6},
         },
         "took": 1,
     })
 
-    suggestions = generate_suggestions(client, "movies", max_count=6)
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"movies": {"mappings": {"properties": {
+                "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+            }}}}
+        def get_settings(self, index):
+            return {"movies": {"settings": {"index": {}}}}
 
-    lowered = [s.lower() for s in suggestions]
-    assert len(lowered) == len(set(lowered))
+    client.indices = _FakeIndices()
+
+    result = generate_suggestions(client, "movies", max_count=6)
+
+    texts_lowered = [s["text"].lower() for s in result["suggestions"]]
+    assert len(texts_lowered) == len(set(texts_lowered))
 
 
 def test_generate_suggestions_empty_index():
     client = _FakeClient()
 
-    suggestions = generate_suggestions(client, "", max_count=6)
+    result = generate_suggestions(client, "", max_count=6)
 
-    assert suggestions == []
+    assert result["suggestions"] == []
 
 
 # ---------------------------------------------------------------------------
 # Autocomplete helpers
 # ---------------------------------------------------------------------------
-def test_resolve_autocomplete_fields_prefers_keyword():
+def test_resolve_autocomplete_fields_prefers_text():
     specs = {
         "title": {"type": "text", "normalizer": ""},
         "genre": {"type": "keyword", "normalizer": ""},
     }
     fields = _resolve_autocomplete_fields(specs)
 
-    assert fields[0] == "genre"
+    assert fields[0] == "title"
 
 
 def test_resolve_autocomplete_fields_with_preferred():
@@ -636,3 +691,183 @@ def test_search_ui_search_hybrid_when_semantic_ready(monkeypatch):
     assert result["query_mode"] == "hybrid_default"
     assert result["used_semantic"] is True
     assert result["capability"] in ("semantic", "manual")
+
+
+# ---------------------------------------------------------------------------
+# _is_vector_value / _strip_vector_fields
+# ---------------------------------------------------------------------------
+def test_is_vector_value_dense():
+    vec = [0.1] * 128
+    assert _is_vector_value(vec) is True
+
+
+def test_is_vector_value_short_list():
+    assert _is_vector_value([1, 2, 3]) is False
+
+
+def test_is_vector_value_sparse():
+    sparse = {str(i): 0.5 for i in range(32)}
+    assert _is_vector_value(sparse) is True
+
+
+def test_is_vector_value_small_dict():
+    assert _is_vector_value({"a": 1, "b": 2}) is False
+
+
+def test_is_vector_value_string():
+    assert _is_vector_value("not a vector") is False
+
+
+def test_is_vector_value_none():
+    assert _is_vector_value(None) is False
+
+
+def test_strip_vector_fields_removes_embeddings():
+    source = {
+        "title": "The Matrix",
+        "year": 1999,
+        "embedding": [0.1] * 128,
+    }
+    cleaned = _strip_vector_fields(source)
+
+    assert "title" in cleaned
+    assert "year" in cleaned
+    assert "embedding" not in cleaned
+
+
+def test_strip_vector_fields_removes_sparse_vectors():
+    source = {
+        "title": "Test",
+        "sparse_vec": {str(i): 0.5 for i in range(32)},
+    }
+    cleaned = _strip_vector_fields(source)
+
+    assert "title" in cleaned
+    assert "sparse_vec" not in cleaned
+
+
+def test_strip_vector_fields_keeps_all_when_no_vectors():
+    source = {"title": "Test", "genre": "Action", "rating": 8.5}
+    cleaned = _strip_vector_fields(source)
+
+    assert cleaned == source
+
+
+# ---------------------------------------------------------------------------
+# detect_index_profile
+# ---------------------------------------------------------------------------
+def test_detect_index_profile_document_search():
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"idx": {"mappings": {"properties": {
+                "title": {"type": "text"},
+                "body": {"type": "text"},
+            }}}}
+        def get_settings(self, index):
+            return {"idx": {"settings": {"index": {}}}}
+
+    client = _FakeClient()
+    client.indices = _FakeIndices()
+
+    profile = detect_index_profile(client, "idx")
+
+    assert profile["suggested_template"] == "document"
+    assert "lexical" in profile["capabilities"]
+    assert profile["has_semantic"] is False
+    assert profile["has_agentic"] is False
+    assert "title" in profile["field_categories"]["text"]
+
+
+def test_detect_index_profile_media_template_disabled():
+    """Media template is disabled; falls back to document-search."""
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"idx": {"mappings": {"properties": {
+                "title": {"type": "text"},
+                "poster": {"type": "text"},
+                "genre": {"type": "keyword"},
+                "rating": {"type": "float"},
+                "year": {"type": "integer"},
+            }}}}
+        def get_settings(self, index):
+            return {"idx": {"settings": {"index": {}}}}
+
+    client = _FakeClient()
+    client.indices = _FakeIndices()
+
+    profile = detect_index_profile(client, "idx")
+
+    # Media is disabled; falls back to document
+    assert profile["suggested_template"] == "document"
+    assert "structured" in profile["capabilities"]
+
+
+def test_detect_index_profile_catalog_template():
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"idx": {"mappings": {"properties": {
+                "name": {"type": "text"},
+                "category": {"type": "keyword"},
+                "brand": {"type": "keyword"},
+                "price": {"type": "float"},
+                "stock": {"type": "integer"},
+            }}}}
+        def get_settings(self, index):
+            return {"idx": {"settings": {"index": {}}}}
+
+    client = _FakeClient()
+    client.indices = _FakeIndices()
+
+    profile = detect_index_profile(client, "idx")
+
+    assert profile["suggested_template"] == "ecommerce"
+
+
+def test_detect_index_profile_hides_vector_fields():
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"idx": {"mappings": {"properties": {
+                "title": {"type": "text"},
+                "embedding_vector": {"type": "knn_vector"},
+            }}}}
+        def get_settings(self, index):
+            return {"idx": {"settings": {"index": {}}}}
+
+    client = _FakeClient()
+    client.indices = _FakeIndices()
+
+    profile = detect_index_profile(client, "idx")
+
+    assert "embedding_vector" not in profile["fields"]
+    assert "embedding_vector" in profile["field_categories"]["vector"]
+
+
+def test_detect_index_profile_semantic_capability():
+    class _FakeIngest:
+        def get_pipeline(self, id):
+            return {id: {"processors": [
+                {"text_embedding": {
+                    "model_id": "model-1",
+                    "field_map": {"title": "embedding"},
+                }}
+            ]}}
+
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"idx": {"mappings": {"properties": {
+                "title": {"type": "text"},
+                "embedding": {"type": "knn_vector"},
+            }}}}
+        def get_settings(self, index):
+            return {"idx": {"settings": {"index": {
+                "default_pipeline": "my-ingest",
+            }}}}
+
+    client = _FakeClient()
+    client.indices = _FakeIndices()
+    client.ingest = _FakeIngest()
+
+    profile = detect_index_profile(client, "idx")
+
+    assert profile["has_semantic"] is True
+    assert "semantic" in profile["capabilities"]

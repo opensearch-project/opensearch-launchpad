@@ -328,10 +328,15 @@ def format_header(config, k, num_tests, method_names):
 
 def format_query_results(test, metrics_by_method, k):
     method_names = list(metrics_by_method.keys())
+    relevance = test.get("relevance", {})
     lines = [
         f"\n{'-' * W}",
         f"  {test['name']}  ({test.get('type', '')})",
         f"  Query: \"{test['query']}\"",
+        f"  Relevance: " + ", ".join(
+            f"{t} [{GRADE_LABELS.get(g, '')}={g}]"
+            for t, g in sorted(relevance.items(), key=lambda x: -x[1])
+        ) if relevance else "  Relevance: (none)",
         f"{'-' * W}",
     ]
 
@@ -410,12 +415,14 @@ def format_ndcg_table(tests, all_metrics, k):
 
 def format_summary(tests, all_metrics, k):
     method_names = list(all_metrics.keys())
+    name_w = max(12, max((len(m) for m in method_names), default=12))
+    row_w = name_w + 12 + 7 + 7 + 7 + 6  # bar + spaces + 3 metric columns
     lines = [
         f"\n{'=' * W}",
         f"  SUMMARY -- Mean Metrics Across {len(tests)} Queries",
         f"{'=' * W}",
-        f"  {'Method':<12s} {'':12s} {'nDCG@'+str(k):>7s} {'P@'+str(k):>7s} {'MRR':>7s}",
-        f"  {'-' * 50}",
+        f"  {'Method':<{name_w}s} {'':12s} {'nDCG@'+str(k):>7s} {'P@'+str(k):>7s} {'MRR':>7s}",
+        f"  {'-' * row_w}",
     ]
 
     for method in method_names:
@@ -423,7 +430,7 @@ def format_summary(tests, all_metrics, k):
         avg_ndcg = sum(m["ndcg"] for m in metrics) / len(metrics)
         avg_pk = sum(m["p@k"] for m in metrics) / len(metrics)
         avg_mrr = sum(m["mrr"] for m in metrics) / len(metrics)
-        lines.append(f"  {method:<12s} {bar(avg_ndcg)}  {avg_ndcg:>7.3f} {avg_pk:>7.2f} {avg_mrr:>7.2f}")
+        lines.append(f"  {method:<{name_w}s} {bar(avg_ndcg)}  {avg_ndcg:>7.3f} {avg_pk:>7.2f} {avg_mrr:>7.2f}")
 
     return "\n".join(lines)
 
@@ -548,6 +555,169 @@ def format_completion(report):
         lines.append(f"  x Further optimization recommended. Apply the highest-impact fix and re-evaluate.")
 
     return "\n".join(lines)
+
+
+def evaluate_search_results(client, index_name, title_field="title", k=5,
+                            max_suggestions=8, extra_queries=None):
+    """Phase 1 of evaluation: generate suggestions, run ALL queries in batch
+    through the real search pipeline, and return results for the agent to judge.
+
+    Args:
+        client: OpenSearch client instance.
+        index_name: Target index.
+        title_field: Field used to identify documents in results output.
+        k: Cutoff depth (number of results per query).
+        max_suggestions: Max programmatic test queries to generate.
+        extra_queries: Optional list of additional queries, each a dict
+            with keys: text, capability.
+
+    Returns:
+        dict with:
+            - queries: list of {query, capability, results: [{title, score}]}
+              for the agent to review and assign relevance grades.
+            - _raw: internal state to pass to evaluate_index() so searches
+              are not re-run.
+    """
+    from .search import generate_suggestions, search_ui_search
+
+    gen = generate_suggestions(client, index_name, max_count=max_suggestions)
+    suggestions = gen.get("suggestions", []) if isinstance(gen, dict) else gen
+
+    all_queries = []
+    for s in suggestions:
+        all_queries.append({"text": s["text"], "capability": s["capability"]})
+
+    if extra_queries:
+        for eq in extra_queries:
+            if eq.get("text"):
+                all_queries.append({
+                    "text": eq["text"],
+                    "capability": eq.get("capability", "semantic"),
+                })
+
+    # Batch search: run all queries through the real pipeline
+    queries_out = []
+    tests = []
+    results = []
+    for i, q in enumerate(all_queries):
+        ui_result = search_ui_search(client, index_name, query_text=q["text"], size=k)
+        os_response = _ui_result_to_os_response(ui_result)
+
+        # Extract titles and scores for agent review
+        hits_summary = []
+        for h in ui_result.get("hits", []):
+            title = h.get("source", {}).get(title_field, h.get("id", "?"))
+            hits_summary.append({"title": title, "score": round(h.get("score", 0), 4)})
+
+        queries_out.append({
+            "query": q["text"],
+            "capability": q["capability"],
+            "results": hits_summary,
+        })
+
+        tests.append({
+            "name": f"Q{i+1}: {q['capability']} query",
+            "type": q["capability"],
+            "query": q["text"],
+            "relevance": {},  # filled in by evaluate_index
+        })
+        results.append(os_response)
+
+    return {
+        "queries": queries_out,
+        "_raw": {"tests": tests, "results": results,
+                 "index_name": index_name, "title_field": title_field, "k": k},
+    }
+
+
+def evaluate_index(client=None, index_name="", title_field="title", k=5,
+                   max_suggestions=8, relevance_overrides=None,
+                   extra_queries=None, search_results=None):
+    """Compute metrics and produce the evaluation report.
+
+    Can be called in two ways:
+    1. With search_results from evaluate_search_results() — skips re-running
+       searches (preferred, avoids duplicate work).
+    2. Without search_results — runs suggestions + searches from scratch.
+
+    Args:
+        client: OpenSearch client (required if search_results is None).
+        index_name: Target index (required if search_results is None).
+        title_field: Field used to identify documents in relevance judgments.
+        k: Cutoff depth for metrics.
+        max_suggestions: Max programmatic test queries to generate.
+        relevance_overrides: Dict mapping query text to {doc_title: grade}.
+        extra_queries: Optional additional queries (only used when
+            search_results is None).
+        search_results: Output from evaluate_search_results(). When provided,
+            client/index_name/k/max_suggestions/extra_queries are ignored.
+
+    Returns:
+        Formatted report string.
+    """
+    overrides = relevance_overrides or {}
+
+    if search_results and "_raw" in search_results:
+        raw = search_results["_raw"]
+        tests = raw["tests"]
+        results = raw["results"]
+        index_name = raw["index_name"]
+        title_field = raw.get("title_field", title_field)
+        k = raw.get("k", k)
+    else:
+        from .search import generate_suggestions, search_ui_search
+
+        gen = generate_suggestions(client, index_name, max_count=max_suggestions)
+        suggestions = gen.get("suggestions", []) if isinstance(gen, dict) else gen
+
+        all_queries = []
+        for s in suggestions:
+            all_queries.append({"text": s["text"], "capability": s["capability"]})
+        if extra_queries:
+            for eq in extra_queries:
+                if eq.get("text"):
+                    all_queries.append({
+                        "text": eq["text"],
+                        "capability": eq.get("capability", "semantic"),
+                    })
+
+        tests = []
+        results = []
+        for i, q in enumerate(all_queries):
+            ui_result = search_ui_search(client, index_name, query_text=q["text"], size=k)
+            os_response = _ui_result_to_os_response(ui_result)
+            tests.append({
+                "name": f"Q{i+1}: {q['capability']} query",
+                "type": q["capability"],
+                "query": q["text"],
+                "relevance": {},
+            })
+            results.append(os_response)
+
+    # Apply relevance overrides
+    for test in tests:
+        test["relevance"] = overrides.get(test["query"], {})
+
+    report = evaluate_results(
+        tests=tests,
+        results_by_method={"Search": results},
+        k=k,
+        title_field=title_field,
+    )
+    return format_report(report, config={"index": index_name})
+
+
+def _ui_result_to_os_response(ui_result):
+    """Convert a search_ui_search response to OpenSearch-style response."""
+    return {
+        "hits": {
+            "total": {"value": ui_result.get("total", 0)},
+            "hits": [
+                {"_id": h["id"], "_source": h["source"], "_score": h["score"]}
+                for h in ui_result.get("hits", [])
+            ],
+        }
+    }
 
 
 def format_report(report, config=None):
