@@ -834,7 +834,7 @@ def search_ui_search(
         elif semantic_ready:
             # Hybrid search: combine BM25 + neural (dense or sparse)
             if has_sparse:
-                semantic_query = _build_neural_sparse_clause(query, vector_field)
+                semantic_query = _build_neural_sparse_clause(query, vector_field, model_id)
             else:
                 semantic_query = _build_neural_clause(query, vector_field, model_id, size)
             executed_body = {

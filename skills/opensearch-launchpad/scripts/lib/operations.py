@@ -328,7 +328,7 @@ def create_pipeline(
             )
             client.indices.put_settings(
                 index=index_name,
-                body={"index": {setting_key.split(".", 2)[-1]: pipeline_name}},
+                body={"index": {setting_key.split(".", 1)[-1]: pipeline_name}},
             )
 
         return f"Pipeline '{pipeline_name}' ({pipeline_type}) created and attached to '{index_name}'."
