@@ -97,6 +97,16 @@ uv run python scripts/opensearch_ops.py search --index my-index --body '{"query"
 uv run python scripts/opensearch_ops.py launch-ui --index my-index
 ```
 
+## Launch Comparison View
+
+After evaluation and restart, compare the baseline and improved indices side by side:
+
+```bash
+uv run python scripts/opensearch_ops.py compare-ui \
+  --baseline my-index-v1 \
+  --improved my-index-v2
+```
+
 ## Connect UI to remote endpoint
 
 ```bash

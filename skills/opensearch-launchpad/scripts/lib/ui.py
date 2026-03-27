@@ -44,6 +44,47 @@ _CONTENT_TYPES = {
 # Mutable state
 _default_index = ""
 _endpoint_override = {}  # {host, port, use_ssl, auth, aws_region, aws_service}
+_comparison_config = {
+    "comparison_enabled": False,
+    "baseline_index": "",
+    "improved_index": "",
+}
+
+
+def set_comparison_mode(baseline_index: str, improved_index: str) -> str:
+    """Configure the UI server for comparison mode.
+
+    Args:
+        baseline_index: The first index name.
+        improved_index: The second index name.
+
+    Returns:
+        Success message or error string.
+    """
+    global _comparison_config
+    if not baseline_index or not improved_index:
+        return "Both baseline and improved index names are required."
+    _comparison_config = {
+        "comparison_enabled": True,
+        "baseline_index": baseline_index,
+        "improved_index": improved_index,
+    }
+    return f"Comparison mode enabled: '{baseline_index}' vs '{improved_index}'."
+
+
+def clear_comparison_mode() -> str:
+    """Disable comparison mode and clear stored index names.
+
+    Returns:
+        Confirmation message.
+    """
+    global _comparison_config
+    _comparison_config = {
+        "comparison_enabled": False,
+        "baseline_index": "",
+        "improved_index": "",
+    }
+    return "Comparison mode disabled."
 
 
 def _get_client():
@@ -120,6 +161,29 @@ class _UIHandler(BaseHTTPRequestHandler):
                 "endpoint": backend["endpoint"],
                 "connected": backend["connected"],
             })
+            return
+
+        # Comparison config
+        if parsed.path == "/api/comparison-config":
+            self._send_json(_comparison_config)
+            return
+
+        # List available indices
+        if parsed.path == "/api/indices":
+            try:
+                client = _get_client()
+                indices = sorted([
+                    idx for idx in client.cat.indices(format="json")
+                    if not str(idx.get("index", "")).startswith(".")
+                ], key=lambda x: x.get("index", ""))
+                self._send_json({
+                    "indices": [
+                        {"name": idx["index"], "docs": idx.get("docs.count", "0"), "health": idx.get("health", "")}
+                        for idx in indices
+                    ]
+                })
+            except Exception as e:
+                self._send_json({"indices": [], "error": str(e)})
             return
 
         # Suggestions

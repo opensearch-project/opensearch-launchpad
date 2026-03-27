@@ -323,6 +323,223 @@ function AgenticChat({ messages, loading }) {
 }
 
 // ---------------------------------------------------------------------------
+// Comparison Toggle
+// ---------------------------------------------------------------------------
+function ComparisonToggle({ enabled, onToggle }) {
+  return (
+    <div className="compare-toggle">
+      <span className="compare-toggle-label">Compare</span>
+      <div
+        role="switch"
+        aria-checked={enabled}
+        aria-label="Toggle comparison mode"
+        tabIndex={0}
+        className={`compare-toggle-track ${enabled ? "on" : ""}`}
+        onClick={() => onToggle(!enabled)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(!enabled); } }}
+      >
+        <div className="compare-toggle-thumb" />
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// ResultPane – one half of the comparison view
+// ---------------------------------------------------------------------------
+function ResultPane({ label, indexName, results, loading, error, stats, queryMode, capability, usedSemantic, fallbackReason, activeTemplate, schema, fieldOverrides, filterSource }) {
+  const capabilityLabel = {
+    exact: "Exact",
+    semantic: "Semantic",
+    structured: "Structured",
+    combined: "Combined",
+    autocomplete: "Autocomplete",
+    fuzzy: "Fuzzy",
+    manual: "Manual",
+  };
+
+  const isSecond = label === "Index 2";
+
+  return (
+    <div className="result-pane">
+      {/* Header */}
+      <div className={`result-pane-header ${isSecond ? "idx2" : "idx1"}`}>
+        <span className={`result-pane-label ${isSecond ? "idx2" : "idx1"}`}>{label}</span>
+        <span className="result-pane-index">{indexName}</span>
+      </div>
+
+      {/* Status row */}
+      <div className="result-pane-status">
+        <span>{stats}</span>
+        {queryMode && <span>mode: {queryMode}</span>}
+        {capability && <span>capability: {capabilityLabel[capability] || capability}</span>}
+        {!error && <span>semantic: {usedSemantic ? "on" : "off"}</span>}
+        {fallbackReason && <span>fallback: {fallbackReason}</span>}
+      </div>
+
+      {/* Loading indicator */}
+      {loading && (
+        <div className="result-pane-loading">
+          <div className="loading-bar"><div className="loading-bar-progress"></div></div>
+          <span className="loading-text">Searching...</span>
+        </div>
+      )}
+
+      {/* Error message */}
+      {error && (
+        <div className="result-pane-error">{error}</div>
+      )}
+
+      {/* Results */}
+      {!loading && !error && (
+        <div className="result-pane-results">
+          {activeTemplate === "ecommerce" || activeTemplate === "media" ? (
+            <EcommerceResults results={results} loading={false} schema={schema} fieldOverrides={fieldOverrides} filterSource={filterSource} />
+          ) : (
+            <DocumentResults results={results} loading={false} filterSource={filterSource} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Comparison View — side-by-side search across two selected indices
+// ---------------------------------------------------------------------------
+function ComparisonView({ query, searchSize, activeTemplate, schema, fieldOverrides, filterSource, compareIndex1, compareIndex2 }) {
+  // Index 1 pane state
+  const [index1Results, setIndex1Results] = useState([]);
+  const [index1Loading, setIndex1Loading] = useState(false);
+  const [index1Error, setIndex1Error] = useState("");
+  const [index1Stats, setIndex1Stats] = useState("Ready");
+  const [index1QueryMode, setIndex1QueryMode] = useState("");
+  const [index1Capability, setIndex1Capability] = useState("");
+  const [index1UsedSemantic, setIndex1UsedSemantic] = useState(false);
+  const [index1FallbackReason, setIndex1FallbackReason] = useState("");
+
+  // Index 2 pane state
+  const [index2Results, setIndex2Results] = useState([]);
+  const [index2Loading, setIndex2Loading] = useState(false);
+  const [index2Error, setIndex2Error] = useState("");
+  const [index2Stats, setIndex2Stats] = useState("Ready");
+  const [index2QueryMode, setIndex2QueryMode] = useState("");
+  const [index2Capability, setIndex2Capability] = useState("");
+  const [index2UsedSemantic, setIndex2UsedSemantic] = useState(false);
+  const [index2FallbackReason, setIndex2FallbackReason] = useState("");
+
+  const runComparisonSearch = async (queryText) => {
+    setIndex1Loading(true);
+    setIndex2Loading(true);
+    setIndex1Error("");
+    setIndex2Error("");
+
+    const makeRequest = (indexName) => {
+      const qs = new URLSearchParams();
+      qs.set("index", indexName);
+      qs.set("q", queryText);
+      qs.set("size", String(searchSize));
+      qs.set("debug", "1");
+      return fetch(`/api/search?${qs.toString()}`).then(r => r.json());
+    };
+
+    const [result1, result2] = await Promise.allSettled([
+      makeRequest(compareIndex1),
+      makeRequest(compareIndex2),
+    ]);
+
+    // Handle index 1 result
+    if (result1.status === "fulfilled") {
+      const data = result1.value;
+      if (data.error) {
+        setIndex1Error(data.error);
+        setIndex1Results([]);
+      } else {
+        setIndex1Results(data.hits || []);
+        setIndex1Stats(`${data.total ?? 0} hits — ${data.took_ms ?? 0}ms`);
+        setIndex1QueryMode(data.query_mode || "");
+        setIndex1Capability(data.capability || "");
+        setIndex1UsedSemantic(Boolean(data.used_semantic));
+        setIndex1FallbackReason(data.fallback_reason || "");
+      }
+    } else {
+      setIndex1Error(result1.reason?.message || "Request failed");
+      setIndex1Results([]);
+    }
+    setIndex1Loading(false);
+
+    // Handle index 2 result
+    if (result2.status === "fulfilled") {
+      const data = result2.value;
+      if (data.error) {
+        setIndex2Error(data.error);
+        setIndex2Results([]);
+      } else {
+        setIndex2Results(data.hits || []);
+        setIndex2Stats(`${data.total ?? 0} hits — ${data.took_ms ?? 0}ms`);
+        setIndex2QueryMode(data.query_mode || "");
+        setIndex2Capability(data.capability || "");
+        setIndex2UsedSemantic(Boolean(data.used_semantic));
+        setIndex2FallbackReason(data.fallback_reason || "");
+      }
+    } else {
+      setIndex2Error(result2.reason?.message || "Request failed");
+      setIndex2Results([]);
+    }
+    setIndex2Loading(false);
+  };
+
+  // Trigger search when query or searchSize changes
+  useEffect(() => {
+    if (query && query.trim()) {
+      runComparisonSearch(query.trim());
+    }
+  }, [query, searchSize]);
+
+  return (
+    <div>
+      {/* Side-by-side result panes */}
+      <div className="comparison-panes">
+        <ResultPane
+          label="Index 1"
+          indexName={compareIndex1}
+          results={index1Results}
+          loading={index1Loading}
+          error={index1Error}
+          stats={index1Stats}
+          queryMode={index1QueryMode}
+          capability={index1Capability}
+          usedSemantic={index1UsedSemantic}
+          fallbackReason={index1FallbackReason}
+          activeTemplate={activeTemplate}
+          schema={schema}
+          fieldOverrides={fieldOverrides}
+          filterSource={filterSource}
+        />
+        <ResultPane
+          label="Index 2"
+          indexName={compareIndex2}
+          results={index2Results}
+          loading={index2Loading}
+          error={index2Error}
+          stats={index2Stats}
+          queryMode={index2QueryMode}
+          capability={index2Capability}
+          usedSemantic={index2UsedSemantic}
+          fallbackReason={index2FallbackReason}
+          activeTemplate={activeTemplate}
+          schema={schema}
+          fieldOverrides={fieldOverrides}
+          filterSource={filterSource}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main App
 // ---------------------------------------------------------------------------
 function App() {
@@ -344,6 +561,13 @@ function App() {
   const [backendType, setBackendType] = useState("");
   const [backendEndpoint, setBackendEndpoint] = useState("");
   const [backendConnected, setBackendConnected] = useState(false);
+
+  // Comparison mode state
+  const [comparisonAvailable, setComparisonAvailable] = useState(false);
+  const [comparisonEnabled, setComparisonEnabled] = useState(false);
+  const [compareIndex1, setCompareIndex1] = useState("");
+  const [compareIndex2, setCompareIndex2] = useState("");
+  const [availableIndices, setAvailableIndices] = useState([]);
 
   // Template & settings state
   const [schema, setSchema] = useState(null);
@@ -447,7 +671,35 @@ function App() {
     }
   };
 
-  useEffect(() => { loadConfig(); }, []);
+  const loadComparisonConfig = async () => {
+    try {
+      const res = await fetch("/api/comparison-config");
+      const data = await res.json();
+      if (data.comparison_enabled) {
+        setComparisonAvailable(true);
+        setComparisonEnabled(true);
+        setCompareIndex1(data.baseline_index);
+        setCompareIndex2(data.improved_index);
+        // Use index 2 for suggestions and schema in comparison mode
+        await loadSuggestions(data.improved_index);
+        await fetchSchema(data.improved_index);
+      }
+    } catch (err) {
+      console.error("Failed to fetch comparison config:", err);
+    }
+  };
+
+  const loadIndices = async () => {
+    try {
+      const res = await fetch("/api/indices");
+      const data = await res.json();
+      const list = Array.isArray(data.indices) ? data.indices : [];
+      setAvailableIndices(list);
+      if (list.length >= 2) setComparisonAvailable(true);
+    } catch (_) {}
+  };
+
+  useEffect(() => { loadConfig(); loadComparisonConfig(); loadIndices(); }, []);
 
   // Refetch schema when index changes (debounced)
   useEffect(() => {
@@ -459,7 +711,7 @@ function App() {
 
   // ---- Autocomplete ----
   useEffect(() => {
-    const effectiveIndex = indexName.trim();
+    const effectiveIndex = (comparisonEnabled && compareIndex2) ? compareIndex2 : indexName.trim();
     const prefix = query.trim();
     const autocompleteActive = effectiveIndex.length > 0 && prefix.length >= 2;
 
@@ -503,10 +755,12 @@ function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [indexName, query, capability, queryMode, autocompleteField]);
+  }, [indexName, query, capability, queryMode, autocompleteField, comparisonEnabled, compareIndex2]);
 
   // ---- Search ----
   const runSearch = async (overrideQuery = null, options = {}) => {
+    // In comparison mode, ComparisonView handles search via its own useEffect on query
+    if (comparisonEnabled) return;
     const effectiveQuery = (overrideQuery !== null ? overrideQuery : query).trim();
     const effectiveIndex = indexName.trim();
     const effectiveSize = parseInt(searchSize, 10) || 20;
@@ -602,6 +856,34 @@ function App() {
         <div className="divider"></div>
         <div className="title">Search Builder</div>
         <div className="topbar-right">
+          {comparisonAvailable && (
+            <ComparisonToggle
+              enabled={comparisonEnabled}
+              onToggle={(on) => {
+                if (on) {
+                  setComparisonEnabled(true);
+                  setResults([]);
+                  setError("");
+                  setStats("Ready");
+                  // Prefill dropdowns if not already set
+                  if (!compareIndex1 || !compareIndex2) {
+                    const current = indexName.trim();
+                    const names = availableIndices.map((i) => i.name);
+                    const other = names.find((n) => n !== current) || "";
+                    if (!compareIndex1) setCompareIndex1(current || names[0] || "");
+                    if (!compareIndex2) setCompareIndex2(other || names[1] || "");
+                  }
+                } else {
+                  setComparisonEnabled(false);
+                  if (compareIndex2) {
+                    setIndexName(compareIndex2);
+                    loadSuggestions(compareIndex2);
+                    fetchSchema(compareIndex2);
+                  }
+                }
+              }}
+            />
+          )}
           <div className={`conn-badge ${backendConnected ? "connected" : "disconnected"}`}>
             <span className="conn-dot"></span>
             <strong>{backendConnected ? "Connected" : "Disconnected"}</strong>
@@ -625,10 +907,46 @@ function App() {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
                 </svg>
-                Index
+                {comparisonEnabled ? "Index 1" : "Index"}
               </label>
-              <input className="idx-input" value={indexName} onChange={(e) => setIndexName(e.target.value)} placeholder="e.g. movies-index" />
+              {availableIndices.length > 0 ? (
+                <select
+                  className="idx-input"
+                  value={comparisonEnabled ? compareIndex1 : indexName}
+                  onChange={(e) => {
+                    if (comparisonEnabled) {
+                      setCompareIndex1(e.target.value);
+                    } else {
+                      setIndexName(e.target.value);
+                      loadSuggestions(e.target.value);
+                      fetchSchema(e.target.value);
+                    }
+                  }}
+                >
+                  <option value="">Select index...</option>
+                  {availableIndices.map((idx) => (
+                    <option key={idx.name} value={idx.name}>{idx.name} ({idx.docs} docs)</option>
+                  ))}
+                </select>
+              ) : (
+                <input className="idx-input" value={indexName} onChange={(e) => setIndexName(e.target.value)} placeholder="e.g. movies-index" />
+              )}
             </div>
+            {comparisonEnabled && (
+              <div className="field-group">
+                <label className="idx2-label">Index 2</label>
+                <select
+                  className="idx-input"
+                  value={compareIndex2}
+                  onChange={(e) => { setCompareIndex2(e.target.value); loadSuggestions(e.target.value); fetchSchema(e.target.value); }}
+                >
+                  <option value="">Select index...</option>
+                  {availableIndices.map((idx) => (
+                    <option key={idx.name} value={idx.name}>{idx.name} ({idx.docs} docs)</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="field-group">
               <label>Size</label>
               <input className="size-input" value={searchSize} onChange={(e) => setSearchSize(e.target.value)} />
@@ -791,29 +1109,45 @@ function App() {
               )}
             </div>
 
-            {/* Status row */}
-            <div className="status-row">
-              <span>{stats}</span>
-              {queryMode && <span>mode: {queryMode}</span>}
-              {capability && <span>capability: {capability}</span>}
-              {!error && <span>semantic: {usedSemantic ? "on" : "off"}</span>}
-              {fallbackReason && <span>fallback: {fallbackReason}</span>}
-              {error && <span className="error">{error}</span>}
-            </div>
+            {/* Results area: comparison view or standard single-index results */}
+            {comparisonEnabled ? (
+              <ComparisonView
+                query={query}
+                searchSize={searchSize}
+                activeTemplate={activeTemplate}
+                schema={schema}
+                fieldOverrides={fieldOverrides}
+                filterSource={filterSource}
+                compareIndex1={compareIndex1}
+                compareIndex2={compareIndex2}
+              />
+            ) : (
+              <>
+                {/* Status row */}
+                <div className="status-row">
+                  <span>{stats}</span>
+                  {queryMode && <span>mode: {queryMode}</span>}
+                  {capability && <span>capability: {capability}</span>}
+                  {!error && <span>semantic: {usedSemantic ? "on" : "off"}</span>}
+                  {fallbackReason && <span>fallback: {fallbackReason}</span>}
+                  {error && <span className="error">{error}</span>}
+                </div>
 
-            {/* Loading bar */}
-            {loading && (
-              <div className="loading-container">
-                <div className="loading-bar"><div className="loading-bar-progress"></div></div>
-                <div className="loading-text">Searching...</div>
-              </div>
-            )}
+                {/* Loading bar */}
+                {loading && (
+                  <div className="loading-container">
+                    <div className="loading-bar"><div className="loading-bar-progress"></div></div>
+                    <div className="loading-text">Searching...</div>
+                  </div>
+                )}
 
-            {/* Template-specific results */}
-            {(activeTemplate === "ecommerce" || activeTemplate === "media") && (
-              <EcommerceResults results={results} loading={loading} schema={schema} fieldOverrides={fieldOverrides} filterSource={filterSource} />
+                {/* Template-specific results */}
+                {(activeTemplate === "ecommerce" || activeTemplate === "media") && (
+                  <EcommerceResults results={results} loading={loading} schema={schema} fieldOverrides={fieldOverrides} filterSource={filterSource} />
+                )}
+                {activeTemplate === "document" && <DocumentResults results={results} loading={loading} filterSource={filterSource} />}
+              </>
             )}
-            {activeTemplate === "document" && <DocumentResults results={results} loading={loading} filterSource={filterSource} />}
           </>
         )}
       </section>

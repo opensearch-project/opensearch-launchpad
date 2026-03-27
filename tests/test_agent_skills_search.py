@@ -17,11 +17,6 @@ from lib.search import (
     _build_default_lexical_query,
     _build_default_lexical_body,
     _build_neural_clause,
-    _strip_wrapping_quotes,
-    _parse_structured_pairs,
-    _parse_structured_clauses,
-    _coerce_structured_value,
-    _split_structured_clauses,
     _suggestion_candidates_from_doc,
     _is_vector_value,
     _strip_vector_fields,
@@ -33,6 +28,7 @@ from lib.search import (
     _extract_values_from_source_by_path,
     autocomplete,
     search_ui_search,
+    _search_configs,
 )
 
 
@@ -254,108 +250,6 @@ def test_build_neural_clause_large_size():
     clause = _build_neural_clause("text", "vec", "m", 50)
 
     assert clause["neural"]["vec"]["k"] == 50
-
-
-# ---------------------------------------------------------------------------
-# Structured query parsing
-# ---------------------------------------------------------------------------
-def test_strip_wrapping_quotes_double():
-    assert _strip_wrapping_quotes('"hello world"') == "hello world"
-
-
-def test_strip_wrapping_quotes_single():
-    assert _strip_wrapping_quotes("'hello'") == "hello"
-
-
-def test_strip_wrapping_quotes_none():
-    assert _strip_wrapping_quotes("hello") == "hello"
-
-
-def test_parse_structured_pairs_single():
-    pairs = _parse_structured_pairs("genre: Comedy")
-
-    assert pairs == [("genre", "Comedy")]
-
-
-def test_parse_structured_pairs_multiple():
-    pairs = _parse_structured_pairs("genre: Comedy and year: 1999")
-
-    assert len(pairs) == 2
-    assert pairs[0] == ("genre", "Comedy")
-    assert pairs[1] == ("year", "1999")
-
-
-def test_parse_structured_pairs_quoted_value():
-    pairs = _parse_structured_pairs('title: "The Matrix"')
-
-    assert pairs == [("title", "The Matrix")]
-
-
-def test_parse_structured_pairs_no_colon():
-    pairs = _parse_structured_pairs("free text search")
-
-    assert pairs == []
-
-
-def test_parse_structured_pairs_invalid_gap():
-    pairs = _parse_structured_pairs("garbage genre: Comedy")
-
-    assert pairs == []
-
-
-def test_coerce_structured_value_integer():
-    assert _coerce_structured_value("42", "integer") == 42
-
-
-def test_coerce_structured_value_float():
-    assert _coerce_structured_value("3.14", "float") == 3.14
-
-
-def test_coerce_structured_value_boolean_true():
-    assert _coerce_structured_value("true", "boolean") is True
-
-
-def test_coerce_structured_value_boolean_false():
-    assert _coerce_structured_value("0", "boolean") is False
-
-
-def test_coerce_structured_value_string():
-    assert _coerce_structured_value("hello", "keyword") == "hello"
-
-
-def test_parse_structured_clauses_text_field():
-    specs = {"title": {"type": "text", "normalizer": ""}}
-    clauses, err = _parse_structured_clauses("title: Matrix", specs)
-
-    assert err == ""
-    assert clauses == [{"match_phrase": {"title": "Matrix"}}]
-
-
-def test_parse_structured_clauses_keyword_field():
-    specs = {"genre": {"type": "keyword", "normalizer": ""}}
-    clauses, err = _parse_structured_clauses("genre: Comedy", specs)
-
-    assert err == ""
-    assert clauses == [{"term": {"genre": {"value": "Comedy"}}}]
-
-
-def test_parse_structured_clauses_unrecognized_returns_none():
-    specs = {"genre": {"type": "keyword", "normalizer": ""}}
-    clauses, err = _parse_structured_clauses("free text", specs)
-
-    assert clauses is None
-
-
-def test_split_structured_clauses():
-    clauses = [
-        {"match_phrase": {"title": "test"}},
-        {"term": {"year": {"value": 2020}}},
-        {"term": {"genre": {"value": "Action"}}},
-    ]
-    text, filters = _split_structured_clauses(clauses)
-
-    assert len(text) == 1
-    assert len(filters) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +516,7 @@ def test_search_ui_search_missing_index():
 
 
 def test_search_ui_search_bm25_default(monkeypatch):
+    _search_configs.clear()
     client = _FakeClient()
 
     class _FakeIndices:
@@ -635,12 +530,12 @@ def test_search_ui_search_bm25_default(monkeypatch):
     result = search_ui_search(client, "idx", "hello world")
 
     assert result["error"] == ""
-    assert result["query_mode"] == "bm25_default"
-    assert result["used_semantic"] is False
-    assert result["capability"] == "manual"
+    assert result["query_mode"] == "bm25"
+    assert result["capability"] == "bm25"
 
 
 def test_search_ui_search_structured_filter(monkeypatch):
+    _search_configs.clear()
     client = _FakeClient()
 
     class _FakeIndices:
@@ -656,12 +551,12 @@ def test_search_ui_search_structured_filter(monkeypatch):
 
     result = search_ui_search(client, "idx", "startYear: 1999 and genres: Comedy")
 
-    assert result["query_mode"] == "structured_filter"
-    assert result["capability"] == "structured"
-    assert result["used_semantic"] is False
+    assert result["query_mode"] == "bm25"
+    assert result["capability"] == "bm25"
 
 
-def test_search_ui_search_hybrid_when_semantic_ready(monkeypatch):
+def test_search_ui_search_dense_vector_no_search_pipeline(monkeypatch):
+    _search_configs.clear()
     class _FakeIngest:
         def get_pipeline(self, id):
             return {id: {"processors": [
@@ -688,9 +583,53 @@ def test_search_ui_search_hybrid_when_semantic_ready(monkeypatch):
 
     result = search_ui_search(client, "idx", "semantic search test")
 
-    assert result["query_mode"] == "hybrid_default"
-    assert result["used_semantic"] is True
-    assert result["capability"] in ("semantic", "manual")
+    assert result["query_mode"] == "dense_vector"
+    assert result["capability"] == "dense_vector"
+
+
+def test_search_ui_search_hybrid_with_search_pipeline(monkeypatch):
+    _search_configs.clear()
+    class _FakeTransport:
+        def perform_request(self, method, url):
+            return {"hybrid-pipeline": {
+                "phase_results_processors": [
+                    {"normalization-processor": {
+                        "normalization": {"technique": "min_max"},
+                        "combination": {"technique": "arithmetic_mean"},
+                    }}
+                ]
+            }}
+
+    class _FakeIngest:
+        def get_pipeline(self, id):
+            return {id: {"processors": [
+                {"text_embedding": {
+                    "model_id": "model-1",
+                    "field_map": {"title": "embedding"},
+                }}
+            ]}}
+
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"idx": {"mappings": {"properties": {
+                "title": {"type": "text"},
+                "embedding": {"type": "knn_vector"},
+            }}}}
+        def get_settings(self, index):
+            return {"idx": {"settings": {"index": {
+                "default_pipeline": "my-ingest",
+                "search": {"default_pipeline": "hybrid-pipeline"},
+            }}}}
+
+    client = _FakeClient()
+    client.indices = _FakeIndices()
+    client.ingest = _FakeIngest()
+    client.transport = _FakeTransport()
+
+    result = search_ui_search(client, "idx", "hybrid search test")
+
+    assert result["query_mode"] == "hybrid"
+    assert result["capability"] == "hybrid"
 
 
 # ---------------------------------------------------------------------------

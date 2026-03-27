@@ -214,7 +214,8 @@ body {
   gap: 4px;
 }
 
-.field-group input {
+.field-group input,
+.field-group select {
   border: 1px solid hsl(var(--input));
   border-radius: var(--radius-lg);
   padding: 8px 12px;
@@ -225,7 +226,16 @@ body {
   height: 36px;
 }
 
-.idx-input { width: 420px; }
+.field-group select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23737373' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+  cursor: pointer;
+}
+
+.idx-input { width: 280px; }
 .size-input { width: 60px; text-align: center; }
 .spacer { flex: 1; }
 
@@ -1079,6 +1089,153 @@ pre {
   box-shadow: 0 0 0 2px hsl(var(--primary) / 0.2);
 }
 
+/* ---------------------------------------------------------------------------
+   Comparison Mode
+   --------------------------------------------------------------------------- */
+
+/* Toggle switch */
+.compare-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compare-toggle-label {
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+  user-select: none;
+  font-weight: 500;
+}
+
+.compare-toggle-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background-color: hsl(var(--input));
+  cursor: pointer;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.compare-toggle-track.on {
+  background-color: hsl(var(--primary));
+}
+
+.compare-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: hsl(var(--card));
+  transition: left 0.2s;
+  box-shadow: var(--shadow-xs);
+}
+
+.compare-toggle-track.on .compare-toggle-thumb {
+  left: 18px;
+}
+
+/* Index 2 label accent color */
+.idx2-label {
+  color: hsl(var(--primary));
+}
+
+/* Comparison panes layout */
+.comparison-panes {
+  display: flex;
+  gap: 12px;
+}
+
+/* Result pane */
+.result-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.result-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.result-pane-header.idx1 {
+  background: hsl(var(--secondary));
+}
+
+.result-pane-header.idx2 {
+  background: hsl(var(--accent));
+}
+
+.result-pane-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: var(--radius-md);
+}
+
+.result-pane-label.idx1 {
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--secondary));
+  border: 1px solid hsl(var(--border));
+}
+
+.result-pane-label.idx2 {
+  color: hsl(var(--primary));
+  background: hsl(var(--accent));
+  border: 1px solid hsl(var(--primary) / 0.2);
+}
+
+.result-pane-index {
+  font-size: 13px;
+  color: hsl(var(--foreground));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-pane-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.result-pane-loading {
+  padding: 16px 12px;
+  text-align: center;
+}
+
+.result-pane-error {
+  margin: 8px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: hsl(var(--destructive) / 0.08);
+  border: 1px solid hsl(var(--destructive) / 0.2);
+  color: hsl(var(--destructive));
+  font-size: 13px;
+}
+
+.result-pane-results {
+  flex: 1;
+  overflow: auto;
+  padding: 0 4px;
+}
+
 /* ---- Animations ---- */
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -1102,6 +1259,10 @@ pre {
 }
 
 /* ---- Responsive ---- */
+@media (max-width: 768px) {
+  .comparison-panes { flex-direction: column; }
+}
+
 @media (max-width: 640px) {
   .search-row { flex-direction: column; }
   .search-btn { min-height: 48px; }

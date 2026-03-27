@@ -1,7 +1,7 @@
 """Search logic for the Agent Skills UI, ported from the MCP path.
 
 Provides smart field detection, semantic/hybrid search, agentic search,
-structured queries, suggestions, autocomplete, and preview text generation.
+suggestions, autocomplete, and preview text generation.
 """
 
 import re
@@ -20,14 +20,6 @@ _KEYWORD_FIELD_TYPES = {"keyword", "constant_keyword"}
 _EXACT_TERM_FIELD_TYPES = _KEYWORD_FIELD_TYPES | _NUMERIC_FIELD_TYPES | {
     "boolean", "date", "date_nanos", "ip", "version", "unsigned_long",
 }
-_STRUCTURED_QUERY_PAIR_PATTERN = re.compile(
-    r"""
-    (?P<field>[A-Za-z0-9_.-]+)\s*:\s*
-    (?P<value>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|.*?)
-    (?:(?:\s+and\s+)(?=[A-Za-z0-9_.-]+\s*:)|$)
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -293,96 +285,6 @@ def _build_neural_sparse_clause(query: str, vector_field: str, model_id: str = "
 
 
 # ---------------------------------------------------------------------------
-# Structured query parsing
-# ---------------------------------------------------------------------------
-def _strip_wrapping_quotes(value_text: str) -> str:
-    normalized = normalize_text(value_text)
-    if len(normalized) >= 2 and (
-        (normalized[0] == normalized[-1] == '"')
-        or (normalized[0] == normalized[-1] == "'")
-    ):
-        return normalize_text(normalized[1:-1])
-    return normalized
-
-
-def _parse_structured_pairs(query_text: str) -> list[tuple[str, str]]:
-    normalized_query = normalize_text(query_text)
-    if ":" not in normalized_query:
-        return []
-    pairs: list[tuple[str, str]] = []
-    cursor = 0
-    for match in _STRUCTURED_QUERY_PAIR_PATTERN.finditer(normalized_query):
-        gap = normalized_query[cursor:match.start()].strip()
-        if gap:
-            return []
-        field_name = normalize_text(match.group("field"))
-        value_text = _strip_wrapping_quotes(match.group("value"))
-        if not field_name or not value_text:
-            return []
-        pairs.append((field_name, value_text))
-        cursor = match.end()
-    if not pairs:
-        return []
-    if normalized_query[cursor:].strip():
-        return []
-    return pairs
-
-
-def _coerce_structured_value(raw_value: str, field_type: str) -> object:
-    normalized = normalize_text(raw_value)
-    lowered = normalized.lower()
-    if field_type in _NUMERIC_FIELD_TYPES:
-        if field_type in {"byte", "short", "integer", "long"}:
-            try:
-                return int(float(normalized))
-            except Exception:
-                return normalized
-        try:
-            return float(normalized)
-        except Exception:
-            return normalized
-    if field_type == "boolean":
-        if lowered in {"true", "1", "yes"}:
-            return True
-        if lowered in {"false", "0", "no"}:
-            return False
-    return normalized
-
-
-def _split_structured_clauses(
-    clauses: list[dict[str, object]],
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    text_clauses: list[dict[str, object]] = []
-    filter_clauses: list[dict[str, object]] = []
-    for clause in clauses:
-        if "match_phrase" in clause:
-            text_clauses.append(clause)
-        else:
-            filter_clauses.append(clause)
-    return text_clauses, filter_clauses
-
-
-def _parse_structured_clauses(
-    query_text: str,
-    field_specs: dict[str, dict[str, str]],
-) -> tuple[list[dict[str, object]] | None, str]:
-    parsed_pairs = _parse_structured_pairs(query_text)
-    if not parsed_pairs:
-        return None, "structured query missing field/value"
-    clauses: list[dict[str, object]] = []
-    for field_name, value_text in parsed_pairs:
-        resolved_field, resolved_spec = _resolve_field_spec_for_doc_key(field_name, field_specs)
-        target_field = resolved_field or field_name
-        field_type = str(resolved_spec.get("type", "")).strip()
-        if field_type == "text":
-            clauses.append({"match_phrase": {target_field: value_text}})
-            continue
-        coerced_value = _coerce_structured_value(value_text, field_type)
-        clauses.append({"term": {target_field: {"value": coerced_value}}})
-    return clauses, ""
-
-
-# ---------------------------------------------------------------------------
 # Preview & suggestions
 # ---------------------------------------------------------------------------
 def _suggestion_candidates_from_doc(source: dict) -> list[str]:
@@ -450,11 +352,9 @@ def generate_suggestions(
     """Generate diverse suggestions with capability/query_mode metadata.
 
     Returns a dict with:
-        - suggestions: list of programmatic test queries (exact, structured,
-          autocomplete, fuzzy, combined). Semantic queries are NOT included —
-          the agent should craft those from the sample_docs.
-        - sample_docs: list of sample documents (vector fields stripped) for
-          the agent to use when crafting semantic test queries.
+        - suggestions: list of test queries covering exact, structured,
+          autocomplete, fuzzy, combined, and semantic (when available).
+        - sample_docs: list of sample documents (vector fields stripped).
         - has_semantic: whether the index supports semantic/hybrid search.
     """
     empty = {"suggestions": [], "sample_docs": [], "has_semantic": False}
@@ -587,7 +487,35 @@ def generate_suggestions(
                 _add(fuzzy_text, "fuzzy", "FUZZY")
                 break
 
-    # 6. Another exact if we have room
+    # 6. Semantic — natural language query from descriptive text fields
+    if has_semantic:
+        # Find long text fields likely to contain descriptions
+        desc_fields = [f for f in text_fields if any(
+            h in f.lower() for h in ("overview", "description", "plot", "summary", "content", "body", "text", "abstract")
+        )]
+        if not desc_fields:
+            # Fall back to any text field that isn't a title
+            desc_fields = [f for f in text_fields if f.lower() not in title_set]
+        if desc_fields:
+            for doc in docs[:10]:
+                val = str(doc.get(desc_fields[0], "")).strip()
+                if len(val) < 20:
+                    continue
+                # Use the first sentence or clause as a natural query
+                for sep in ",;.—":
+                    pos = val.find(sep)
+                    if 15 < pos < 80:
+                        phrase = val[:pos].strip()
+                        break
+                else:
+                    # No sentence boundary — take first ~8 words
+                    words = val.split()
+                    phrase = " ".join(words[:min(8, len(words))]).rstrip(".,;:")
+                if 10 < len(phrase) < 120:
+                    _add(phrase, "semantic", "SEMANTIC")
+                    break
+
+    # 7. Another exact if we have room
     if title_fields and len(meta) < max_count:
         for doc in docs[5:12]:
             val = str(doc.get(title_fields[0], "")).strip()
@@ -751,14 +679,96 @@ def autocomplete(
 
 
 # ---------------------------------------------------------------------------
+# Search config: one query configuration per index from the execution plan
+# ---------------------------------------------------------------------------
+_search_configs: dict[str, dict] = {}
+
+
+def set_search_config(index_name: str, config: dict) -> None:
+    """Store the execution plan's query configuration for an index.
+
+    Config keys:
+        strategy: "bm25" | "neural_sparse" | "dense_vector" | "hybrid" | "agentic"
+        lexical_fields: list of field names (with optional ^boost)
+        vector_field: name of the vector/rank_features field (if semantic)
+        vector_type: "sparse" | "dense" (if semantic)
+        model_id: ML model ID for query-time encoding (if semantic)
+    """
+    _search_configs[index_name] = config
+
+
+def get_search_config(index_name: str) -> dict | None:
+    """Retrieve the stored search config for an index, or None."""
+    return _search_configs.get(index_name)
+
+
+def _introspect_search_config(client: OpenSearch, index_name: str) -> dict:
+    """Derive a search config by introspecting the index (fallback when no
+    execution plan config is available)."""
+    field_specs = extract_index_field_specs(client, index_name)
+    lexical_fields = _resolve_text_query_fields(field_specs)
+    hints = _resolve_semantic_runtime_hints(client, index_name, field_specs)
+
+    vector_field = hints.get("vector_field", "")
+    model_id = hints.get("model_id", "")
+    has_sparse = hints.get("has_sparse", "false") == "true"
+    has_neural = hints.get("has_neural_search_pipeline", "false") == "true"
+    has_agentic = hints.get("has_agentic_pipeline", "false") == "true"
+    semantic_ready = bool(vector_field and (model_id or (has_sparse and has_neural)))
+
+    has_search_pipeline = bool(hints.get("search_pipeline", ""))
+    if has_agentic:
+        strategy = "agentic"
+    elif semantic_ready and has_search_pipeline:
+        strategy = "hybrid"
+    elif semantic_ready:
+        strategy = "neural_sparse" if has_sparse else "dense_vector"
+    else:
+        strategy = "bm25"
+
+    return {
+        "strategy": strategy,
+        "lexical_fields": lexical_fields,
+        "vector_field": vector_field,
+        "vector_type": "sparse" if has_sparse else "dense",
+        "model_id": model_id,
+    }
+
+
+def _build_search_query(config: dict, query_text: str, size: int) -> dict:
+    """Build the search query clause from a search config and query text.
+
+    The same query structure is used for ALL query types (exact, fuzzy,
+    semantic, autocomplete) because the index's pipeline configuration
+    handles scoring and normalization.
+    """
+    strategy = config.get("strategy", "bm25")
+    lexical_fields = config.get("lexical_fields", ["*"])
+    vector_field = config.get("vector_field", "")
+    vector_type = config.get("vector_type", "sparse")
+    model_id = config.get("model_id", "")
+
+    lexical = _build_default_lexical_query(query_text, lexical_fields)
+
+    if strategy == "hybrid":
+        if vector_type == "sparse":
+            semantic = _build_neural_sparse_clause(query_text, vector_field, model_id)
+        else:
+            semantic = _build_neural_clause(query_text, vector_field, model_id, size)
+        return {"hybrid": {"queries": [lexical, semantic]}}
+    elif strategy == "neural_sparse":
+        return _build_neural_sparse_clause(query_text, vector_field, model_id)
+    elif strategy == "dense_vector":
+        return _build_neural_clause(query_text, vector_field, model_id, size)
+    elif strategy == "agentic":
+        return {"agentic": {"query_text": query_text}}
+    else:
+        return lexical
+
+
+# ---------------------------------------------------------------------------
 # Main search
 # ---------------------------------------------------------------------------
-_AGENTIC_INDICATORS = [
-    " and ", " or ", "why", "how", "what are", "show me",
-    "find", "compare", "top", "best", "under", "over", "between", "?",
-]
-
-
 def search_ui_search(
     client: OpenSearch,
     index_name: str,
@@ -778,95 +788,40 @@ def search_ui_search(
         empty_response["error"] = "Missing index name."
         return empty_response
 
+    # Load execution plan config, or introspect once and cache
+    config = get_search_config(index_name)
+    if not config:
+        config = _introspect_search_config(client, index_name)
+        set_search_config(index_name, config)
+
+    strategy = config.get("strategy", "bm25")
     query = query_text.strip()
-    query_mode = "match_all"
-    used_semantic = False
     fallback_reason = ""
-    executed_body: dict[str, object] = {"size": size, "query": {"match_all": {}}}
+    used_semantic = strategy in ("hybrid", "neural_sparse", "dense_vector", "agentic")
 
-    field_specs = extract_index_field_specs(client, index_name)
-    lexical_fields = _resolve_text_query_fields(field_specs)
-
-    if query:
-        runtime_hints = _resolve_semantic_runtime_hints(client, index_name, field_specs)
-        vector_field = runtime_hints.get("vector_field", "")
-        model_id = runtime_hints.get("model_id", "")
-        has_agentic_pipeline = runtime_hints.get("has_agentic_pipeline", "false") == "true"
-        has_sparse = runtime_hints.get("has_sparse", "false") == "true"
-        has_neural_search_pipeline = runtime_hints.get("has_neural_search_pipeline", "false") == "true"
-        semantic_ready = bool(vector_field and (model_id or (has_sparse and has_neural_search_pipeline)))
-        lexical_query = _build_default_lexical_query(query=query, fields=lexical_fields)
-
-        # Agentic search for complex queries
-        if has_agentic_pipeline:
-            query_lower = query.lower()
-            if any(indicator in query_lower for indicator in _AGENTIC_INDICATORS):
-                executed_body = {
-                    "size": size,
-                    "query": {"agentic": {"query_text": query}},
-                }
-                query_mode = "agentic_search"
-                used_semantic = True
-
-                try:
-                    response = client.search(index=index_name, body=executed_body)
-                    return _format_search_response(
-                        response, query_mode, "agentic", used_semantic,
-                        fallback_reason, executed_body if debug else None,
-                    )
-                except Exception as e:
-                    fallback_reason = f"agentic search failed: {e}"
-
-        # Structured query detection (field:value pairs)
-        structured_clauses, _ = _parse_structured_clauses(query, field_specs)
-        if structured_clauses is not None:
-            text_clauses, filter_clauses = _split_structured_clauses(structured_clauses)
-            bool_query: dict[str, object] = {}
-            if text_clauses:
-                bool_query["must"] = text_clauses
-            if filter_clauses:
-                bool_query["filter"] = filter_clauses
-            executed_body = {
-                "size": size,
-                "query": {"bool": bool_query} if bool_query else {"match_all": {}},
-            }
-            query_mode = "structured_filter"
-        elif semantic_ready:
-            # Hybrid search: combine BM25 + neural (dense or sparse)
-            if has_sparse:
-                semantic_query = _build_neural_sparse_clause(query, vector_field, model_id)
-            else:
-                semantic_query = _build_neural_clause(query, vector_field, model_id, size)
-            executed_body = {
-                "size": size,
-                "query": {
-                    "hybrid": {
-                        "queries": [lexical_query, semantic_query],
-                    }
-                },
-            }
-            query_mode = "hybrid_default"
-            used_semantic = True
-        else:
-            # BM25 with smart field targeting
-            executed_body = _build_default_lexical_body(query=query, size=size, fields=lexical_fields)
-            query_mode = "bm25_default"
+    if not query:
+        executed_body: dict = {"size": size, "query": {"match_all": {}}}
+        query_mode = "match_all"
     else:
-        executed_body = {"size": size, "query": {"match_all": {}}}
+        # Build query from the execution plan config — same for all queries
+        executed_body = {
+            "size": size,
+            "query": _build_search_query(config, query, size),
+        }
+        query_mode = strategy
 
     try:
         response = client.search(index=index_name, body=executed_body)
     except Exception as query_error:
         if query:
-            fallback_reason = (
-                f"{fallback_reason}; primary query failed: {query_error}"
-                if fallback_reason else f"primary query failed: {query_error}"
+            fallback_reason = f"primary query failed: {query_error}"
+            lexical_fields = config.get("lexical_fields", ["*"])
+            executed_body = _build_default_lexical_body(
+                query=query, size=size, fields=lexical_fields,
             )
-            executed_body = _build_default_lexical_body(query=query, size=size, fields=lexical_fields)
             try:
                 response = client.search(index=index_name, body=executed_body)
-            except Exception as fallback_error:
-                # Last resort: simple multi_match on all fields
+            except Exception:
                 executed_body = {
                     "size": size,
                     "query": {"multi_match": {"query": query, "fields": ["*"]}},
@@ -877,11 +832,7 @@ def search_ui_search(
         else:
             raise
 
-    capability = "manual"
-    if used_semantic:
-        capability = "agentic" if query_mode == "agentic_search" else "semantic"
-    elif query_mode == "structured_filter":
-        capability = "structured"
+    capability = strategy
 
     return _format_search_response(
         response, query_mode, capability, used_semantic,

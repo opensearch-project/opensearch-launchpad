@@ -275,6 +275,25 @@ def cmd_search_docs(args):
 def cmd_create_flow_agent(args):
     from lib.operations import create_flow_agent
     print(create_flow_agent(args.name, args.model_id))
+def cmd_compare_ui(args):
+    from lib.ui import set_comparison_mode, launch_ui
+    result = set_comparison_mode(args.baseline, args.improved)
+    print(result)
+    if "Error" in result or "required" in result.lower():
+        sys.exit(1)
+    ui_result = launch_ui(args.improved)
+    print(ui_result)
+    if "started" in ui_result.lower() or "running" in ui_result.lower():
+        try:
+            print("Press Ctrl+C to stop the UI server.", file=sys.stderr)
+            import time
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nStopping UI server.", file=sys.stderr)
+
+
+
 
 
 def cmd_create_agentic_pipeline(args):
@@ -373,6 +392,11 @@ def main():
     p.add_argument("--session-token", default="")
     p.add_argument("--model-name", default="us.anthropic.claude-sonnet-4-20250514-v1:0")
 
+    # compare-ui
+    p = sub.add_parser("compare-ui", help="Launch Search Builder UI in comparison mode")
+    p.add_argument("--baseline", required=True, help="Baseline index name (before evaluation)")
+    p.add_argument("--improved", required=True, help="Improved index name (after evaluation)")
+
     # create-flow-agent
     p = sub.add_parser("create-flow-agent", help="Create a flow agent for agentic search")
     p.add_argument("--name", required=True)
@@ -403,6 +427,7 @@ def main():
         "index-bulk": cmd_index_bulk,
         "launch-ui": cmd_launch_ui,
         "connect-ui": cmd_connect_ui,
+        "compare-ui": cmd_compare_ui,
         "search": cmd_search,
         "load-sample": cmd_load_sample,
         "cleanup": cmd_cleanup,
