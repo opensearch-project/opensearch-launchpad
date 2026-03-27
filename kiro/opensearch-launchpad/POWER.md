@@ -272,9 +272,28 @@ This power provides an OpenSearch Search Solution building workflow. It collects
   - Re-render the `evaluation_result_table` as a markdown table but with the `?` replaced by your actual relevance judgments (`relevant` or `irrelevant`). Include ALL rows from the original table — do not skip any queries or docs.
   - Below the table, show the evaluation summary: dimension scores, `search_quality_summary`, `issues`, and `suggested_preferences`.
 - Doc details in the table have embeddings automatically stripped (fields containing `embedding` or `vector` are removed).
-- If `suggested_preferences` is non-empty, offer to start over with the new preferences:
-  *"Based on the evaluation, I suggest restarting with updated preferences to improve search quality. Would you like to try again?"*
-- If the user agrees to restart, go back to Phase 1 (`load_sample`) and apply the suggested preferences automatically in Phase 2.
+- After presenting the evaluation, offer the user three options:
+  1. **Restart with improvements** — apply the recommended fixes and rebuild with a new index.
+  2. **Deploy to AWS** (Phase 5) — deploy the current configuration as-is.
+  3. **Done for now** — keep experimenting with the Search Builder UI.
+- If HIGH severity findings exist, recommend option 1 and explain the specific fix. If only LOW findings, note that the setup is acceptable and any option is reasonable.
+- If `suggested_preferences` is non-empty, include them in the option 1 recommendation.
+
+#### Restart / Improvement Flow
+
+When the user chooses to restart with improvements:
+
+1. **Record the current index name** — do NOT delete the old index. The user needs it for comparison.
+2. Restart from **Phase 3** (planning), not Phase 1. The sample data is already loaded — only the search strategy/pipeline needs to change. Apply the `suggested_preferences` from the evaluation automatically.
+3. During Phase 4 execution, create the new index with a **different name** (e.g. append `-v2` or `-improved` to the original index name). Do not overwrite the original index.
+4. After Phase 4 completes on the improved index, call `launch_search_ui(index_name=<new_index>)` to relaunch the UI pointing at the new index.
+5. Call `set_search_ui_comparison_mode(baseline_index=<old_index>, improved_index=<new_index>)` to enable side-by-side comparison in the UI.
+6. Inform the user:
+   *"The improved search setup is live. You can use the Compare toggle in the Search Builder to see the old index alongside the new one and compare results side by side. Both indices are available in the index dropdowns."*
+7. After the user reviews, offer:
+   1. **Re-evaluate** — run `start_evaluation()` again on the improved index to measure the impact.
+   2. **Deploy to AWS** (Phase 5) — deploy the improved configuration.
+   3. **Done for now** — keep experimenting with the Search Builder UI.
 - If the user declines evaluation or declines to restart, proceed to Phase 5.
 
 ### Phase 5: Deploy to AWS OpenSearch (optional)
@@ -323,6 +342,8 @@ This power provides an OpenSearch Search Solution building workflow. It collects
 | `set_evaluation_from_evaluation_complete` | 4.5 | Parse/store evaluator output for manual evaluation mode |
 | `prepare_aws_deployment` | 5 | Get deployment target, local config, steering file list, and state template for AWS deployment |
 | `connect_search_ui_to_endpoint` | 5 | Switch Search UI to query an AWS OpenSearch endpoint after deployment |
+| `set_search_ui_comparison_mode` | 4.5 | Enable side-by-side comparison of two indices in the Search UI |
+| `clear_search_ui_comparison_mode` | 4.5 | Disable comparison mode in the Search UI |
 | `cleanup` | Post | Remove test documents and clear session credentials on user request |
 
 ### Knowledge Tools
@@ -342,7 +363,7 @@ This power provides an OpenSearch Search Solution building workflow. It collects
 - For preference questions, ask one question per turn and use user-input UI fixed options. Accept either a number or free-text answer.
 - Do not ask redundant clarification questions for items already inferred from the sample data.
 - Phase 4.5 (evaluation) is optional and should only be offered after successful Phase 4 execution. Always proactively mention it is available.
-- If evaluation suggests new preferences, offer to restart from Phase 1 with those preferences pre-applied.
+- If evaluation suggests improvements, offer to restart from Phase 3 with a new index name — do not overwrite the original index. Enable comparison mode after the improved index is built.
 - Phase 5 (AWS deployment) is optional and should only be offered after successful Phase 4 execution.
 
 ## Prerequisites

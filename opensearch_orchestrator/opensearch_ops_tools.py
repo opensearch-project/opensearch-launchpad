@@ -122,6 +122,13 @@ class _SearchUIRuntime:
 
 _search_ui = _SearchUIRuntime()
 
+# Comparison mode state (mirrors skills/opensearch-launchpad/scripts/lib/ui.py)
+_comparison_config: dict[str, object] = {
+    "comparison_enabled": False,
+    "baseline_index": "",
+    "improved_index": "",
+}
+
 _UI_STATE_FILE = Path(tempfile.gettempdir()) / f"opensearch_search_ui_{SEARCH_UI_PORT}.json"
 _ui_state_mtime: float = 0.0
 _SEARCH_UI_SERVICE_NAME = "opensearch-search-ui"
@@ -157,6 +164,8 @@ def _write_ui_state() -> None:
         "default_index": _search_ui.default_index,
         "suggestion_meta_by_index": _search_ui.suggestion_meta_by_index,
     }
+    # Persist comparison mode so the detached UI server subprocess can use it.
+    state["comparison_config"] = _comparison_config
     # Persist endpoint override so the detached UI server subprocess can use it.
     if _search_ui.endpoint_override_host:
         state["endpoint_override"] = {
@@ -190,6 +199,11 @@ def _maybe_reload_ui_state() -> None:
         state = json.loads(_UI_STATE_FILE.read_text(encoding="utf-8"))
         _search_ui.default_index = state.get("default_index", "")
         _search_ui.suggestion_meta_by_index = state.get("suggestion_meta_by_index", {})
+        # Restore comparison mode from persisted state.
+        global _comparison_config
+        comparison = state.get("comparison_config")
+        if isinstance(comparison, dict):
+            _comparison_config = comparison
         # Restore endpoint override from persisted state.
         override = state.get("endpoint_override")
         if isinstance(override, dict) and override.get("host"):
@@ -5472,6 +5486,164 @@ def _search_ui_content_type(path: Path) -> str:
     return _SEARCH_UI_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
+# ---------------------------------------------------------------------------
+# Comparison mode helpers (mirrors skills lib/ui.py)
+# ---------------------------------------------------------------------------
+
+def set_comparison_mode(baseline_index: str, improved_index: str) -> str:
+    """Configure the UI server for comparison mode."""
+    global _comparison_config
+    if not baseline_index or not improved_index:
+        return "Both baseline and improved index names are required."
+    _comparison_config = {
+        "comparison_enabled": True,
+        "baseline_index": baseline_index,
+        "improved_index": improved_index,
+    }
+    _write_ui_state()
+    return f"Comparison mode enabled: '{baseline_index}' vs '{improved_index}'."
+
+
+def clear_comparison_mode() -> str:
+    """Disable comparison mode and clear stored index names."""
+    global _comparison_config
+    _comparison_config = {
+        "comparison_enabled": False,
+        "baseline_index": "",
+        "improved_index": "",
+    }
+    _write_ui_state()
+    return "Comparison mode disabled."
+
+
+def _list_user_indices() -> list[dict[str, str]]:
+    """List non-system indices from the connected OpenSearch cluster."""
+    try:
+        client = _create_client()
+        indices = sorted(
+            [
+                idx
+                for idx in client.cat.indices(format="json")
+                if not str(idx.get("index", "")).startswith(".")
+            ],
+            key=lambda x: x.get("index", ""),
+        )
+        return [
+            {
+                "name": idx["index"],
+                "docs": idx.get("docs.count", "0"),
+                "health": idx.get("health", ""),
+            }
+            for idx in indices
+        ]
+    except Exception:
+        return []
+
+
+def detect_index_profile(index_name: str) -> dict:
+    """Analyze index to detect field categories, capabilities, and suggest a UI template.
+
+    Mirrors skills/opensearch-launchpad/scripts/lib/search.py::detect_index_profile
+    but uses the MCP server's internal client and field introspection functions.
+    """
+    opensearch_client = _create_client()
+    field_specs = _extract_index_field_specs(opensearch_client, index_name)
+    runtime_hints = _resolve_semantic_runtime_hints(opensearch_client, index_name, field_specs)
+
+    text_fields: list[str] = []
+    keyword_fields: list[str] = []
+    numeric_fields: list[str] = []
+    date_fields: list[str] = []
+    vector_fields: list[str] = []
+
+    for name, spec in field_specs.items():
+        ftype = spec.get("type", "")
+        if ftype == "text" and not name.endswith(".keyword"):
+            text_fields.append(name)
+        elif ftype in _KEYWORD_FIELD_TYPES and not name.endswith(".keyword"):
+            keyword_fields.append(name)
+        elif ftype in _NUMERIC_FIELD_TYPES:
+            numeric_fields.append(name)
+        elif ftype in ("date", "date_nanos"):
+            date_fields.append(name)
+        elif ftype in ("knn_vector", "rank_features"):
+            vector_fields.append(name)
+
+    has_agentic = runtime_hints.get("has_agentic_pipeline", "false") == "true"
+    has_sparse = runtime_hints.get("has_sparse", "false") == "true"
+    has_neural_search_pipeline = runtime_hints.get("has_neural_search_pipeline", "false") == "true"
+    has_semantic = bool(
+        (
+            runtime_hints.get("vector_field")
+            and (runtime_hints.get("model_id") or (has_sparse and has_neural_search_pipeline))
+        )
+        or has_neural_search_pipeline
+    )
+
+    capabilities = ["lexical"]
+    if has_semantic:
+        capabilities.insert(0, "semantic")
+    if has_agentic:
+        capabilities.insert(0, "agentic")
+    if keyword_fields or numeric_fields:
+        capabilities.append("structured")
+
+    _image_hints = {
+        "image", "img", "poster", "photo", "thumbnail",
+        "picture", "cover", "avatar", "logo", "icon",
+    }
+    has_image_field = any(
+        any(hint in name.lower() for hint in _image_hints) for name in field_specs
+    )
+
+    _price_hints = {
+        "price", "cost", "msrp", "amount", "discount", "sale_price", "list_price",
+    }
+    has_price_field = any(
+        any(hint in name.lower() for hint in _price_hints) for name in numeric_fields
+    )
+
+    _ecommerce_hints = {
+        "category", "brand", "sku", "product", "vendor",
+        "manufacturer", "color", "size", "stock", "inventory",
+    }
+    has_ecommerce_field = any(
+        any(hint in name.lower() for hint in _ecommerce_hints) for name in keyword_fields
+    )
+
+    if has_price_field or (has_image_field and has_ecommerce_field):
+        template = "ecommerce"
+    elif text_fields or vector_fields:
+        template = "document"
+    else:
+        template = "document"
+
+    _embedding_hints = {"embedding", "vector", "knn", "dense_vector", "rank_features"}
+    _hidden = set(vector_fields)
+    for name in field_specs:
+        if any(h in name.lower() for h in _embedding_hints):
+            _hidden.add(name)
+
+    ui_fields = {n: s["type"] for n, s in field_specs.items() if n not in _hidden}
+    ui_field_specs = {n: s for n, s in field_specs.items() if n not in _hidden}
+
+    return {
+        "fields": ui_fields,
+        "field_specs": ui_field_specs,
+        "field_categories": {
+            "text": [f for f in text_fields if f not in _hidden],
+            "keyword": [f for f in keyword_fields if f not in _hidden],
+            "numeric": [f for f in numeric_fields if f not in _hidden],
+            "date": [f for f in date_fields if f not in _hidden],
+            "vector": vector_fields,
+        },
+        "capabilities": capabilities,
+        "suggested_template": template,
+        "has_semantic": has_semantic,
+        "has_agentic": has_agentic,
+    }
+
+
 class _SearchUIRequestHandler(BaseHTTPRequestHandler):
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -5528,12 +5700,37 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path == "/api/comparison-config":
+            self._write_json(_comparison_config)
+            return
+
+        if parsed.path == "/api/indices":
+            try:
+                indices = _list_user_indices()
+                self._write_json({"indices": indices})
+            except Exception as e:
+                self._write_json({"indices": [], "error": str(e)})
+            return
+
+        if parsed.path == "/api/schema":
+            index_name = params.get("index", [""])[0] or _search_ui.default_index
+            if not index_name:
+                self._write_json({"error": "No index specified."}, status=400)
+                return
+            try:
+                schema = detect_index_profile(index_name)
+                schema["index"] = index_name
+                self._write_json(schema)
+            except Exception as e:
+                self._write_json({"error": str(e)}, status=500)
+            return
+
         if parsed.path == "/api/suggestions":
             index_name = params.get("index", [""])[0] or _search_ui.default_index
-            suggestions, suggestion_meta = _search_ui_suggestions(index_name, max_count=6)
+            suggestions, suggestion_meta = _search_ui_suggestions(index_name, max_count=8)
             self._write_json(
                 {
-                    "suggestions": suggestions,
+                    "suggestions": suggestion_meta if suggestion_meta else suggestions,
                     "suggestion_meta": suggestion_meta,
                     "index": index_name,
                 }
@@ -5601,6 +5798,42 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
             self._write_file(static_asset)
             return
 
+        self._write_json({"error": "Not found"}, status=404)
+
+    def do_POST(self) -> None:  # noqa: N802
+        _maybe_reload_ui_state()
+        _record_ui_activity()
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/search":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                length = 0
+            body = json.loads(self.rfile.read(length)) if length else {}
+            index_name = body.pop("index", _search_ui.default_index) or _search_ui.default_index
+            size = body.pop("size", 20)
+            if not index_name:
+                self._write_json({"error": "No index specified."}, status=400)
+                return
+            try:
+                if "query" in body:
+                    # Raw DSL pass-through
+                    client = _create_client()
+                    result = client.search(index=index_name, body=body, size=size)
+                    self._write_json(result)
+                else:
+                    query_text = body.get("q", body.get("query_text", ""))
+                    debug = body.get("debug", False)
+                    result = _search_ui_search(
+                        index_name=index_name,
+                        query_text=query_text,
+                        size=size,
+                        debug=debug,
+                    )
+                    self._write_json(result)
+            except Exception as e:
+                self._write_json({"error": str(e)}, status=500)
+            return
         self._write_json({"error": "Not found"}, status=404)
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A003

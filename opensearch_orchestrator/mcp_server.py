@@ -88,6 +88,8 @@ from opensearch_orchestrator.opensearch_ops_tools import (
     cleanup_ui_server as cleanup_ui_server_impl,
     set_search_ui_suggestions as set_search_ui_suggestions_impl,
     connect_search_ui_to_endpoint as connect_search_ui_to_endpoint_impl,
+    set_comparison_mode as set_comparison_mode_impl,
+    clear_comparison_mode as clear_comparison_mode_impl,
     build_evaluation_attachments as build_evaluation_attachments_impl,
     run_data_driven_evaluation_pipeline,
     process_relevance_judgments as process_relevance_judgments_impl,
@@ -2274,6 +2276,23 @@ def connect_search_ui_to_endpoint(
         aws_service=aws_service,
         index_name=index_name,
     )
+
+
+@mcp.tool()
+def set_search_ui_comparison_mode(baseline_index: str, improved_index: str) -> str:
+    """Enable comparison mode in the Search UI to show side-by-side results from two indices.
+
+    Args:
+        baseline_index: The first index name (shown on the left).
+        improved_index: The second index name (shown on the right).
+    """
+    return set_comparison_mode_impl(baseline_index, improved_index)
+
+
+@mcp.tool()
+def clear_search_ui_comparison_mode() -> str:
+    """Disable comparison mode in the Search UI."""
+    return clear_comparison_mode_impl()
 
 
 
