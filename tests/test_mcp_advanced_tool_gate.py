@@ -27,6 +27,7 @@ def test_default_tool_surface_is_workflow_only() -> None:
     assert tool_names == {
         "apply_capability_driven_verification",
         "cleanup",
+        "clear_search_ui_comparison_mode",
         "complete_execution",
         "connect_search_ui_to_endpoint",
         "create_and_attach_pipeline",
@@ -55,6 +56,7 @@ def test_default_tool_surface_is_workflow_only() -> None:
         "set_plan_from_planning_complete",
         "set_preferences",
         "set_relevance_judgments",
+        "set_search_ui_comparison_mode",
         "set_search_ui_suggestions",
         "start_evaluation",
         "start_planning",
