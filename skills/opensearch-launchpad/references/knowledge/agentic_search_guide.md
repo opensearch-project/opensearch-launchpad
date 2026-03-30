@@ -219,7 +219,7 @@ This eliminates the need for manual query routing logic.
 | **OpenAI API** | Easy setup, SOTA models | External dependency, per-call cost |
 | **Self-hosted** | Full control | Infrastructure overhead |
 
-**Recommended:** Amazon Bedrock with Claude 4 Sonnet for AWS OpenSearch deployments.
+**Recommended:** Amazon Bedrock with Claude 4 Sonnet for Amazon OpenSearch Service deployments.
 
 ### 8.2 Scaling
 

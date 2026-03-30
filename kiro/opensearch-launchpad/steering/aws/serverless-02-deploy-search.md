@@ -1,5 +1,5 @@
 ---
-title: "AWS OpenSearch Serverless - Step 2: Deploy Search Configuration"
+title: "Amazon OpenSearch Serverless - Step 2: Deploy Search Configuration"
 inclusion: manual
 ---
 

@@ -1,4 +1,4 @@
-# AWS OpenSearch Serverless — Step 2: Deploy Search Configuration
+# Amazon OpenSearch Serverless — Step 2: Deploy Search Configuration
 
 This guide covers creating indices, deploying ML models, and configuring pipelines on the serverless collection.
 

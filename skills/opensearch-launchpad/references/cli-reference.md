@@ -110,10 +110,10 @@ uv run python scripts/opensearch_ops.py compare-ui \
 ## Connect UI to remote endpoint
 
 ```bash
-# AWS OpenSearch Service
+# Amazon OpenSearch Service
 uv run python scripts/opensearch_ops.py connect-ui --endpoint search-my-domain.us-east-1.es.amazonaws.com --aws-region us-east-1 --aws-service es --index my-index
 
-# AWS OpenSearch Serverless
+# Amazon OpenSearch Serverless
 uv run python scripts/opensearch_ops.py connect-ui --endpoint abc123.us-east-1.aoss.amazonaws.com --aws-region us-east-1 --aws-service aoss --index my-index
 
 # Basic auth

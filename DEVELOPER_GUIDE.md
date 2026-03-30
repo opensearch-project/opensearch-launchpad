@@ -199,7 +199,7 @@ The server exposes high-level phase tools:
 | `set_relevance_judgments` | 4.5 | Store manual LLM relevance judgments; call when `manual_judgment_required=true` |
 | `set_evaluation_from_evaluation_complete` | 4.5 | Parse/store `<evaluation_complete>` evaluator response |
 | `prepare_aws_deployment` | 5 | Return deployment target and steering files for AWS |
-| `connect_search_ui_to_endpoint` | 5 | Switch Search UI to query an AWS OpenSearch endpoint after deployment |
+| `connect_search_ui_to_endpoint` | 5 | Switch Search UI to query an Amazon OpenSearch Service endpoint after deployment |
 | `cleanup` | Post | Remove test documents on user request |
 
 The following execution/knowledge tools are also exposed:

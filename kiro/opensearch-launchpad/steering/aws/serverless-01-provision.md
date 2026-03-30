@@ -1,5 +1,5 @@
 ---
-title: "AWS OpenSearch Serverless - Step 1: Provision Collection"
+title: "Amazon OpenSearch Serverless - Step 1: Provision Collection"
 inclusion: manual
 ---
 

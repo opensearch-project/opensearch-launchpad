@@ -1,4 +1,4 @@
-# AWS OpenSearch Domain — Step 2: Deploy Search Configuration
+# Amazon OpenSearch Service Domain — Step 2: Deploy Search Configuration
 
 This guide covers migrating index configuration, deploying ML models, and creating pipelines on the OpenSearch domain.
 

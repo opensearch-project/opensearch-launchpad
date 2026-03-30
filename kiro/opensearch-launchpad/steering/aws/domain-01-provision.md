@@ -1,11 +1,11 @@
 ---
-title: "AWS OpenSearch Domain - Step 1: Provision Domain"
+title: "Amazon OpenSearch Service Domain - Step 1: Provision Domain"
 inclusion: manual
 ---
 
 # Provision OpenSearch Domain
 
-This guide covers creating and configuring an AWS OpenSearch Domain (managed cluster). Follow it after `prepare_aws_deployment()` returns `deployment_target: "domain"`.
+This guide covers creating and configuring an Amazon OpenSearch Service Domain (managed cluster). Follow it after `prepare_aws_deployment()` returns `deployment_target: "domain"`.
 
 ## Prerequisites
 

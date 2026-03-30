@@ -235,14 +235,14 @@ Execute the approved plan step by step using `opensearch_ops.py` commands: creat
 After the UI is running, present the next steps:
 > "Your search app is live! Here's what you can do next:"
 > 1. **Evaluate search quality** (Phase 4.5) — I'll run test queries, measure relevance metrics (nDCG, precision, MRR), and suggest improvements.
-> 2. **Deploy to AWS** (Phase 5) — Provision an Amazon OpenSearch cluster and deploy your search setup.
+> 2. **Deploy to Amazon OpenSearch Service** (Phase 5) — Provision an Amazon OpenSearch cluster and deploy your search setup.
 > 3. **Done for now** — Keep experimenting with the Search Builder UI.
 
 ### Phase 4.5 — Evaluate (Optional)
 
 If the user chooses to evaluate search quality, read and follow `references/knowledge/evaluation_guide.md` for the full methodology. If HIGH severity findings exist, offer to restart from Phase 3 with a specific fix.
 
-### Phase 5 — Deploy to AWS (Optional)
+### Phase 5 — Deploy to Amazon OpenSearch Service (Optional)
 
 Only if the user wants AWS deployment. Read the appropriate reference guide:
 

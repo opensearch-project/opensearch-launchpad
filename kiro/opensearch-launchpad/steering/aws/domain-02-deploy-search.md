@@ -1,5 +1,5 @@
 ---
-title: "AWS OpenSearch Domain - Step 2: Deploy Search Configuration"
+title: "Amazon OpenSearch Service Domain - Step 2: Deploy Search Configuration"
 inclusion: manual
 ---
 

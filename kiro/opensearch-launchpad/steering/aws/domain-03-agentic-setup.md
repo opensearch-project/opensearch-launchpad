@@ -1,5 +1,5 @@
 ---
-title: "AWS OpenSearch Domain - Step 3: Configure Agentic Search"
+title: "Amazon OpenSearch Service Domain - Step 3: Configure Agentic Search"
 inclusion: manual
 ---
 

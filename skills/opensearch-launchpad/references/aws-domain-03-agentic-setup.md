@@ -1,4 +1,4 @@
-# AWS OpenSearch Domain — Step 3: Configure Agentic Search
+# Amazon OpenSearch Service Domain — Step 3: Configure Agentic Search
 
 This guide configures conversational agents with QueryPlanningTool for natural language search. Only follow this for agentic search strategy.
 

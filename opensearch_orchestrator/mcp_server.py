@@ -2253,7 +2253,7 @@ def connect_search_ui_to_endpoint(
     aws_service: str = "",
     index_name: str = "",
 ) -> str:
-    """Switch the Search UI to query an AWS OpenSearch endpoint instead of local.
+    """Switch the Search UI to query an Amazon OpenSearch Service endpoint instead of local.
     Call after successful Phase 5 AWS deployment to point the Search UI at the cloud endpoint.
 
     Args:
@@ -2531,7 +2531,7 @@ def set_relevance_judgments(judgment_response: str) -> dict:
 
 @mcp.tool()
 def prepare_aws_deployment() -> dict:
-    """Prepare structured context for deploying the local search strategy to AWS OpenSearch.
+    """Prepare structured context for deploying the local search strategy to Amazon OpenSearch Service.
     Call after successful Phase 4 execution.
 
     Returns deployment target (serverless or domain), search strategy, local configuration,

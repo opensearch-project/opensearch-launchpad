@@ -238,7 +238,7 @@ Present the evaluation results, then offer the user these options:
 
 > "Based on the evaluation, here's what you can do next:"
 > 1. **Restart with improvements** — I'll apply the recommended fixes and rebuild the search setup with a new index.
-> 2. **Deploy to AWS** (Phase 5) — Deploy the current configuration as-is.
+> 2. **Deploy to Amazon OpenSearch Service** (Phase 5) — Deploy the current configuration as-is.
 > 3. **Done for now** — Keep experimenting with the Search Builder UI.
 
 If HIGH severity findings exist, recommend option 1 and explain the specific fix. If only LOW findings, note that the setup is acceptable and any option is reasonable.
@@ -261,5 +261,5 @@ uv run python scripts/opensearch_ops.py launch-ui --index <new-index-name>
 
 After the user reviews the results, offer:
 > 1. **Re-evaluate** — Run the evaluation again on the improved index to measure the impact.
-> 2. **Deploy to AWS** (Phase 5) — Deploy the improved configuration.
+> 2. **Deploy to Amazon OpenSearch Service** (Phase 5) — Deploy the improved configuration.
 > 3. **Done for now** — Keep experimenting with the Search Builder UI.

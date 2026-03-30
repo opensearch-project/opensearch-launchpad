@@ -1,11 +1,11 @@
 ---
-title: "AWS OpenSearch Serverless Deployment"
+title: "Amazon OpenSearch Serverless Deployment"
 inclusion: manual
 ---
 
-# AWS OpenSearch Serverless Deployment Guide
+# Amazon OpenSearch Serverless Deployment Guide
 
-This guide covers deploying your local OpenSearch search strategy to AWS OpenSearch Serverless.
+This guide covers deploying your local OpenSearch search strategy to Amazon OpenSearch Serverless.
 
 ## When to Use OpenSearch Serverless
 

@@ -1,9 +1,9 @@
 ---
-title: "AWS OpenSearch Deployment Reference"
+title: "Amazon OpenSearch Service Deployment Reference"
 inclusion: manual
 ---
 
-# AWS OpenSearch Deployment Reference
+# Amazon OpenSearch Service Deployment Reference
 
 Reference material for cost, security, and operations. Load only when the user asks about these topics.
 

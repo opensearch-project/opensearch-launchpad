@@ -16,7 +16,7 @@ author: "AWS"
 
 ## AWS Setup (for Phase 5 deployment)
 
-Phase 5 (AWS deployment) is optional. Only complete this setup if you want to deploy to AWS OpenSearch.
+Phase 5 (AWS deployment) is optional. Only complete this setup if you want to deploy to Amazon OpenSearch Service.
 
 ### Step 1: Add AWS MCP Servers
 
@@ -274,7 +274,7 @@ This power provides an OpenSearch Search Solution building workflow. It collects
 - Doc details in the table have embeddings automatically stripped (fields containing `embedding` or `vector` are removed).
 - After presenting the evaluation, offer the user three options:
   1. **Restart with improvements** — apply the recommended fixes and rebuild with a new index.
-  2. **Deploy to AWS** (Phase 5) — deploy the current configuration as-is.
+  2. **Deploy to Amazon OpenSearch Service** (Phase 5) — deploy the current configuration as-is.
   3. **Done for now** — keep experimenting with the Search Builder UI.
 - If HIGH severity findings exist, recommend option 1 and explain the specific fix. If only LOW findings, note that the setup is acceptable and any option is reasonable.
 - If `suggested_preferences` is non-empty, include them in the option 1 recommendation.
@@ -292,12 +292,12 @@ When the user chooses to restart with improvements:
    *"The improved search setup is live. You can use the Compare toggle in the Search Builder to see the old index alongside the new one and compare results side by side. Both indices are available in the index dropdowns."*
 7. After the user reviews, offer:
    1. **Re-evaluate** — run `start_evaluation()` again on the improved index to measure the impact.
-   2. **Deploy to AWS** (Phase 5) — deploy the improved configuration.
+   2. **Deploy to Amazon OpenSearch Service** (Phase 5) — deploy the improved configuration.
    3. **Done for now** — keep experimenting with the Search Builder UI.
 - If the user declines evaluation or declines to restart, proceed to Phase 5.
 
-### Phase 5: Deploy to AWS OpenSearch (optional)
-- After successful local execution, offer to deploy the search strategy to AWS OpenSearch.
+### Phase 5: Deploy to Amazon OpenSearch Service (optional)
+- After successful local execution, offer to deploy the search strategy to Amazon OpenSearch Service.
 - **Important**: Before starting Phase 5, guide the user to add AWS MCP servers to the power's mcp.json configuration (see AWS Setup in Onboarding section). Verify the servers are configured before proceeding.
 - Call `prepare_aws_deployment()` to get the deployment context. This returns:
   - `deployment_target`: "serverless" or "domain" (determined automatically from search strategy)
@@ -341,7 +341,7 @@ When the user chooses to restart with improvements:
 | `start_evaluation` | 4.5 | Evaluate search quality; may return `manual_evaluation_required` with evaluator prompt |
 | `set_evaluation_from_evaluation_complete` | 4.5 | Parse/store evaluator output for manual evaluation mode |
 | `prepare_aws_deployment` | 5 | Get deployment target, local config, steering file list, and state template for AWS deployment |
-| `connect_search_ui_to_endpoint` | 5 | Switch Search UI to query an AWS OpenSearch endpoint after deployment |
+| `connect_search_ui_to_endpoint` | 5 | Switch Search UI to query an Amazon OpenSearch Service endpoint after deployment |
 | `set_search_ui_comparison_mode` | 4.5 | Enable side-by-side comparison of two indices in the Search UI |
 | `clear_search_ui_comparison_mode` | 4.5 | Disable comparison mode in the Search UI |
 | `cleanup` | Post | Remove test documents and clear session credentials on user request |

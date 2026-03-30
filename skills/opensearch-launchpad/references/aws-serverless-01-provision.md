@@ -1,4 +1,4 @@
-# AWS OpenSearch Serverless — Step 1: Provision Collection
+# Amazon OpenSearch Serverless — Step 1: Provision Collection
 
 This guide covers creating and configuring an OpenSearch Serverless collection. Follow it after `prepare_aws_deployment()` returns `deployment_target: "serverless"`.
 

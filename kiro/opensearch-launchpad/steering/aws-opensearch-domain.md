@@ -1,11 +1,11 @@
 ---
-title: "AWS OpenSearch Domain Deployment for Agentic Search"
+title: "Amazon OpenSearch Service Domain Deployment for Agentic Search"
 inclusion: manual
 ---
 
-# AWS OpenSearch Domain Deployment Guide (Agentic Search)
+# Amazon OpenSearch Service Domain Deployment Guide (Agentic Search)
 
-This guide covers deploying your local OpenSearch search strategy to AWS OpenSearch Domain (managed cluster).
+This guide covers deploying your local OpenSearch search strategy to Amazon OpenSearch Service Domain (managed cluster).
 
 ## When to Use OpenSearch Domain
 

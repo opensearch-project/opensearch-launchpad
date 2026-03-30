@@ -1,4 +1,4 @@
-# AWS OpenSearch Deployment Reference
+# Amazon OpenSearch Service Deployment Reference
 
 Reference material for cost, security, and operations. Load only when the user asks about these topics.
 
