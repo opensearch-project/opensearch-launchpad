@@ -653,6 +653,18 @@ def test_is_vector_value_small_dict():
     assert _is_vector_value({"a": 1, "b": 2}) is False
 
 
+def test_is_vector_value_sparse_token_weights():
+    """Neural sparse token-weight vectors with word keys should be detected."""
+    sparse = {"movie": 0.33, "comedy": 0.12, "funny": 0.08, "film": 0.05}
+    assert _is_vector_value(sparse) is True
+
+
+def test_is_vector_value_small_sparse():
+    """Sparse vectors with fewer than 16 but >= 4 entries should be detected."""
+    sparse = {str(i): 0.5 for i in range(5)}
+    assert _is_vector_value(sparse) is True
+
+
 def test_is_vector_value_string():
     assert _is_vector_value("not a vector") is False
 

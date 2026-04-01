@@ -314,11 +314,14 @@ def _is_vector_value(v: object) -> bool:
         sample = v[:8]
         if all(isinstance(x, (int, float)) for x in sample):
             return True
-    if isinstance(v, dict) and len(v) >= 16:
+    if isinstance(v, dict) and len(v) >= 4:
         # Sparse vector: dict with string keys and numeric values
         # Covers both numeric-key sparse vectors and neural sparse
         # token-weight vectors (e.g. {"movie": 0.33, "comedy": 0.12})
-        sample = list(v.items())[:8]
+        # Use a low threshold (4) to catch pruned sparse vectors with
+        # fewer tokens.
+        items = list(v.items())
+        sample = items[:16] if len(items) > 16 else items
         if all(
             isinstance(k, str) and isinstance(val, (int, float))
             for k, val in sample

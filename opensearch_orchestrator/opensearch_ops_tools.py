@@ -4310,15 +4310,17 @@ def _is_vector_value(v: object) -> bool:
     """Return True if *v* looks like a dense or sparse vector.
 
     - Dense: list of 16+ numbers.
-    - Sparse: dict of 16+ entries with numeric-string keys and numeric values.
+    - Sparse: dict of 4+ entries with string keys and numeric values.
+      Covers both numeric-key sparse vectors and neural sparse
+      token-weight vectors (e.g. {"movie": 0.33, "comedy": 0.12}).
     """
     if isinstance(v, list) and len(v) > 16:
         return all(isinstance(x, (int, float)) for x in v[:8])
-    if isinstance(v, dict) and len(v) > 16:
-        sample_keys = list(v.keys())[:8]
-        sample_vals = list(v.values())[:8]
-        return (all(isinstance(k, str) and k.isdigit() for k in sample_keys)
-                and all(isinstance(x, (int, float)) for x in sample_vals))
+    if isinstance(v, dict) and len(v) >= 4:
+        items = list(v.items())
+        sample = items[:16] if len(items) > 16 else items
+        return all(isinstance(k, str) and isinstance(val, (int, float))
+                   for k, val in sample)
     return False
 
 
