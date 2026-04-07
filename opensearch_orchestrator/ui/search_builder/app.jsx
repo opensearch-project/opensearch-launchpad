@@ -3,6 +3,7 @@ const { useEffect, useState, useRef, useCallback } = React;
 const TEMPLATES = [
   { id: "document", label: "Document" },
   { id: "ecommerce", label: "E-Commerce" },
+  { id: "agent", label: "Agent" },
 ];
 
 function TemplateIcon({ id }) {
@@ -18,6 +19,13 @@ function TemplateIcon({ id }) {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+      </svg>
+    );
+  }
+  if (id === "agent") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
       </svg>
     );
   }
@@ -259,9 +267,9 @@ function AgenticChat({ messages, loading }) {
             </svg>
           </div>
           <div className="chat-empty-title">Conversational Search</div>
-          <div className="chat-empty-desc">Ask questions in natural language. I'll search the index and summarize what I find.</div>
+          <div className="chat-empty-desc">Have a conversation with the AI agent about your data. Ask follow-up questions and the agent will remember the context of your conversation.</div>
           <div className="chat-empty-examples">
-            Try: "Show me sci-fi movies rated above 8" or "What are the best films by Christopher Nolan?"
+            Try: "Show me sci-fi movies from the 1990s" then follow up with "Which of those are also comedies?"
           </div>
         </div>
       )}
@@ -273,6 +281,17 @@ function AgenticChat({ messages, loading }) {
             <div className="chat-assistant">
               {msg.results && msg.results.length > 0 ? (
                 <>
+                  {msg.agent_steps_summary && (
+                    <details className="chat-agent-reasoning" open>
+                      <summary>Agent reasoning</summary>
+                      <div className="chat-reasoning-content">
+                        <div className="chat-reasoning-section">
+                          <div className="chat-reasoning-label">Steps</div>
+                          <pre className="chat-reasoning-pre">{msg.agent_steps_summary}</pre>
+                        </div>
+                      </div>
+                    </details>
+                  )}
                   <div className="chat-summary">
                     {renderChatText(msg.summary || generateChatSummary(msg.query, msg.results, msg.total))}
                   </div>
@@ -294,6 +313,16 @@ function AgenticChat({ messages, loading }) {
                       ))}
                     </div>
                   </details>
+                  {msg.dsl_query && (
+                    <details className="chat-agent-reasoning">
+                      <summary>Generated DSL</summary>
+                      <div className="chat-reasoning-content">
+                        <div className="chat-reasoning-section">
+                          <pre className="chat-reasoning-pre">{(() => { try { return JSON.stringify(JSON.parse(msg.dsl_query), null, 2); } catch(e) { return msg.dsl_query; } })()}</pre>
+                        </div>
+                      </div>
+                    </details>
+                  )}
                 </>
               ) : msg.error ? (
                 <div className="chat-error">{msg.error}</div>
@@ -609,6 +638,16 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
+  // Chat / agent state
+  const [chatMessages, setChatMessages] = useState([]);
+  const [memoryId, setMemoryId] = useState(null);
+  const [prevComparisonEnabled, setPrevComparisonEnabled] = useState(false);
+  const [ragAnswer, setRagAnswer] = useState("");
+  const [agentStepsSummary, setAgentStepsSummary] = useState("");
+  const [dslQuery, setDslQuery] = useState("");
+  // "search" = google-like (flow agent), "chat" = chatbox (conversational agent)
+  const [agenticMode, setAgenticMode] = useState("search");
+
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
   }, [darkMode]);
@@ -653,6 +692,17 @@ function App() {
     manual: "Manual",
   };
 
+  // ---- Template change with comparison mode management ----
+  const handleTemplateChange = (newTemplate) => {
+    if (newTemplate === "agent" && activeTemplate !== "agent") {
+      setPrevComparisonEnabled(comparisonEnabled);
+      setComparisonEnabled(false);
+    } else if (newTemplate !== "agent" && activeTemplate === "agent") {
+      setComparisonEnabled(prevComparisonEnabled);
+    }
+    setActiveTemplate(newTemplate);
+  };
+
   // ---- Schema fetch ----
   const fetchSchema = useCallback(async (index) => {
     if (!index) return;
@@ -661,10 +711,14 @@ function App() {
       const data = await res.json();
       if (!data.error) {
         setSchema(data);
-        setActiveTemplate(data.suggested_template || "document");
+        handleTemplateChange(data.suggested_template || "document");
+        // Set agentic mode based on agent type — only on initial load
+        if (data.agentic_agent_type && !schema) {
+          setAgenticMode(data.agentic_agent_type === "conversational" ? "chat" : "search");
+        }
       }
     } catch (_) {}
-  }, []);
+  }, [handleTemplateChange]);
 
   // ---- Suggestions ----
   const loadSuggestions = async (index) => {
@@ -795,8 +849,61 @@ function App() {
     };
   }, [indexName, query, capability, queryMode, autocompleteField, comparisonEnabled, compareIndex2]);
 
+  // ---- Agent Search ----
+  const runAgentSearch = async (overrideQuery = null) => {
+    const effectiveQuery = (overrideQuery !== null ? overrideQuery : query).trim();
+    const effectiveIndex = indexName.trim();
+    if (!effectiveIndex || !effectiveQuery) return;
+
+    setChatMessages(prev => [...prev, { role: "user", text: effectiveQuery }]);
+    setLoading(true);
+    setError("");
+
+    try {
+      const qs = new URLSearchParams();
+      qs.set("index", effectiveIndex);
+      qs.set("q", effectiveQuery);
+      qs.set("size", String(parseInt(searchSize, 10) || 20));
+      qs.set("debug", "1");
+      if (memoryId) qs.set("memory_id", memoryId);
+
+      const res = await fetch(`/api/search?${qs.toString()}`);
+      const data = await res.json();
+
+      if (data.error) {
+        const friendlyError = data.error.includes("expired") 
+          ? "AI agent credentials have expired. Please refresh and try again."
+          : data.error.includes("timeout") 
+          ? "The AI agent took too long to respond. Please try a simpler question."
+          : "I had trouble processing your question. Please try rephrasing it.";
+        setChatMessages(prev => [...prev, { role: "assistant", error: friendlyError }]);
+      } else {
+        const hits = Array.isArray(data.hits) ? data.hits : [];
+        const summary = generateChatSummary(effectiveQuery, hits, data.total ?? 0);
+        setChatMessages(prev => [...prev, {
+          role: "assistant",
+          query: effectiveQuery,
+          results: hits,
+          total: data.total ?? 0,
+          took_ms: data.took_ms ?? 0,
+          capability: data.capability || "",
+          summary: data.rag_answer || summary,
+          agent_steps_summary: data.agent_steps_summary || "",
+          dsl_query: data.dsl_query || "",
+        }]);
+        if (data.memory_id) setMemoryId(data.memory_id);
+      }
+    } catch (err) {
+      setChatMessages(prev => [...prev, { role: "assistant", error: "Something went wrong. Please try again." }]);
+    } finally {
+      setLoading(false);
+      setQuery("");
+    }
+  };
+
   // ---- Search ----
   const runSearch = async (overrideQuery = null, options = {}) => {
+    if (activeTemplate === "agent" && agenticMode === "chat") { runAgentSearch(overrideQuery); return; }
     // In comparison mode, ComparisonView handles search via its own useEffect on query
     if (comparisonEnabled) return;
     const effectiveQuery = (overrideQuery !== null ? overrideQuery : query).trim();
@@ -831,6 +938,9 @@ function App() {
         setCapability(String(data.capability || ""));
         setFallbackReason(String(data.fallback_reason || ""));
         setUsedSemantic(Boolean(data.used_semantic));
+        setRagAnswer(String(data.rag_answer || ""));
+        setAgentStepsSummary(String(data.agent_steps_summary || ""));
+        setDslQuery(String(data.dsl_query || ""));
         await loadSuggestions(effectiveIndex);
       }
     } catch (err) {
@@ -934,6 +1044,8 @@ function App() {
                       setIndexName(v);
                       loadSuggestions(v);
                       fetchSchema(v);
+                      setChatMessages([]);
+                      setMemoryId(null);
                     }
                   }}
                   placeholder="Select index..."
@@ -999,7 +1111,7 @@ function App() {
                   title=""
                   onClick={() => {
                     if (disabled) return;
-                    setActiveTemplate(t.id);
+                    handleTemplateChange(t.id);
                   }}
                 >
                   <div className="tpl-card-icon"><TemplateIcon id={t.id} /></div>
@@ -1058,8 +1170,28 @@ function App() {
       )}
 
       <section className="search-panel">
-            {/* Standard search bar */}
+            {/* Search bar — always visible. In agent mode, toggle is inline */}
             <div className="search-row">
+              {activeTemplate === "agent" && (
+                <div className="agentic-mode-toggle" role="radiogroup" aria-label="Agentic mode">
+                  <button
+                    className={`agentic-mode-btn ${agenticMode === "search" ? "active" : ""}`}
+                    onClick={() => setAgenticMode("search")}
+                    role="radio" aria-checked={agenticMode === "search"}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    Search
+                  </button>
+                  <button
+                    className={`agentic-mode-btn ${agenticMode === "chat" ? "active" : ""}`}
+                    onClick={() => setAgenticMode("chat")}
+                    role="radio" aria-checked={agenticMode === "chat"}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    Chat
+                  </button>
+                </div>
+              )}
               <div className="query-wrap">
                 <span className="query-icon">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1069,8 +1201,8 @@ function App() {
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { setAutocompleteOptions([]); runSearch(); } }}
-                  placeholder="Search..."
+                  onKeyDown={(e) => { if (e.key === "Enter") { setAutocompleteOptions([]); runSearch(query); } }}
+                  placeholder={activeTemplate === "agent" ? "Ask a question..." : "Search..."}
                 />
                 {autocompleteOptions.length > 0 && (
                   <div className="autocomplete-menu">
@@ -1083,12 +1215,18 @@ function App() {
                   </div>
                 )}
               </div>
-              <button className="search-btn" onClick={() => runSearch()} disabled={loading}>
-                {loading ? "..." : "Search"}
+              <button className="search-btn" onClick={() => runSearch(query)} disabled={loading}>
+                {loading ? "..." : (activeTemplate === "agent" && agenticMode === "chat" ? "Send" : "Search")}
               </button>
+              {activeTemplate === "agent" && agenticMode === "chat" && chatMessages.length > 0 && (
+                <button className="clear-chat-btn" onClick={() => { setChatMessages([]); setMemoryId(null); }}>
+                  Clear
+                </button>
+              )}
             </div>
 
-            {/* Suggestions */}
+            {/* Suggestions - hidden in agent mode */}
+            {activeTemplate !== "agent" && (
             <div className="suggestions">
               <div className="chips">
                 {suggestions.slice(0, 5).map((item) => (
@@ -1103,6 +1241,7 @@ function App() {
                   ))}
                 </div>
             </div>
+            )}
 
             {/* Results area: comparison view or standard single-index results */}
             {comparisonEnabled ? (
@@ -1118,18 +1257,30 @@ function App() {
               />
             ) : (
               <>
-                {/* Status row */}
+                {/* Status row — only shown after a search has been performed */}
+                {(activeTemplate !== "agent" || agenticMode === "search") && results.length > 0 && (
                 <div className="status-row">
                   <span>{stats}</span>
                   {queryMode && <span>mode: {queryMode}</span>}
                   {capability && <span>capability: {capability}</span>}
-                  {!error && <span>semantic: {usedSemantic ? "on" : "off"}</span>}
-                  {fallbackReason && <span>fallback: {fallbackReason}</span>}
+                  {activeTemplate !== "agent" && !error && <span>semantic: {usedSemantic ? "on" : "off"}</span>}
                   {error && <span className="error">{error}</span>}
                 </div>
+                )}
 
-                {/* Loading bar */}
-                {loading && (
+                {/* Agentic fallback warning — shown when agentic search failed and fell back to BM25 */}
+                {activeTemplate === "agent" && fallbackReason && fallbackReason.includes("agentic search failed") && (
+                  <div className="agentic-fallback-warning">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <span>AI agent unavailable — showing standard search results.
+                      {fallbackReason.includes("expired") && " AWS credentials may have expired."}
+                      {fallbackReason.includes("timeout") && " The request timed out."}
+                    </span>
+                  </div>
+                )}
+
+                {/* Loading bar - hidden in agent chat mode (has typing indicator) */}
+                {loading && (activeTemplate !== "agent" || agenticMode === "search") && (
                   <div className="loading-container">
                     <div className="loading-bar"><div className="loading-bar-progress"></div></div>
                     <div className="loading-text">Searching...</div>
@@ -1137,6 +1288,67 @@ function App() {
                 )}
 
                 {/* Template-specific results */}
+                {activeTemplate === "agent" && agenticMode === "chat" && (
+                  <AgenticChat messages={chatMessages} loading={loading} />
+                )}
+                {activeTemplate === "agent" && agenticMode === "search" && (
+                  <>
+                    {!loading && results.length === 0 && !ragAnswer && !error && (
+                      <div className="chat-empty">
+                        <div className="chat-empty-icon">
+                          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{opacity: 0.3}}>
+                            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                          </svg>
+                        </div>
+                        <div className="chat-empty-title">Agentic Search</div>
+                        <div className="chat-empty-desc">Ask questions in natural language. The AI agent will decompose your query and find relevant results.</div>
+                        <div className="chat-empty-examples">
+                          Try: "Show me sci-fi movies from the 1990s" or "Find horror movies longer than 2 hours"
+                        </div>
+                      </div>
+                    )}
+                    {ragAnswer && (
+                      <div className="rag-answer-card">
+                        <div className="rag-answer-text">{renderChatText(ragAnswer)}</div>
+                      </div>
+                    )}
+                    {(agentStepsSummary || dslQuery) && results.length > 0 && (
+                      <div className="search-reasoning-bar">
+                        {agentStepsSummary && (
+                          <details className="chat-agent-reasoning">
+                            <summary>Agent reasoning</summary>
+                            <div className="chat-reasoning-content">
+                              <div className="chat-reasoning-section">
+                                <pre className="chat-reasoning-pre">{agentStepsSummary}</pre>
+                              </div>
+                            </div>
+                          </details>
+                        )}
+                        {dslQuery && (
+                          <details className="chat-agent-reasoning">
+                            <summary>Generated DSL</summary>
+                            <div className="chat-reasoning-content">
+                              <div className="chat-reasoning-section">
+                                <pre className="chat-reasoning-pre">{(() => { try { return JSON.stringify(JSON.parse(dslQuery), null, 2); } catch(e) { return dslQuery; } })()}</pre>
+                              </div>
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    )}
+                    {results.length > 0 && <DocumentResults results={results} loading={loading} filterSource={filterSource} />}
+                  </>
+                )}
+                {activeTemplate === "document" && (
+                  <>
+                    {ragAnswer && (
+                      <div className="rag-answer-card">
+                        <div className="rag-answer-text">{renderChatText(ragAnswer)}</div>
+                      </div>
+                    )}
+                    <DocumentResults results={results} loading={loading} filterSource={filterSource} />
+                  </>
+                )}
                 {(activeTemplate === "ecommerce" || activeTemplate === "media") && (
                   <EcommerceResults results={results} loading={loading} schema={schema} fieldOverrides={fieldOverrides} filterSource={filterSource} />
                 )}
