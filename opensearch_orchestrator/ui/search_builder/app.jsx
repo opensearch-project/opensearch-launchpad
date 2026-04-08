@@ -6,6 +6,21 @@ const TEMPLATES = [
   { id: "agent", label: "Agent" },
 ];
 
+const AGENT_PROMPTS = {
+  search: [
+    "Show me sci-fi movies from the 1990s",
+    "Top rated crime films",
+    "Movies directed by Christopher Nolan",
+    "Find animated films with high ratings",
+  ],
+  chat: [
+    "What are the highest rated movies?",
+    "Tell me about sci-fi films in the collection",
+    "Which directors have multiple movies?",
+    "Recommend a good thriller",
+  ],
+};
+
 function TemplateIcon({ id }) {
   const size = 20;
   if (id === "document") {
@@ -251,7 +266,7 @@ function renderChatText(text) {
   });
 }
 
-function AgenticChat({ messages, loading }) {
+function AgenticChat({ messages, loading, onPromptClick }) {
   const endRef = useRef(null);
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -267,9 +282,11 @@ function AgenticChat({ messages, loading }) {
             </svg>
           </div>
           <div className="chat-empty-title">Conversational Search</div>
-          <div className="chat-empty-desc">Have a conversation with the AI agent about your data. Ask follow-up questions and the agent will remember the context of your conversation.</div>
-          <div className="chat-empty-examples">
-            Try: "Show me sci-fi movies from the 1990s" then follow up with "Which of those are also comedies?"
+          <div className="chat-empty-desc">Ask follow-up questions and the agent will remember the context of your conversation.</div>
+          <div className="suggested-prompts">
+            {AGENT_PROMPTS.chat.map((p) => (
+              <button key={p} className="suggested-prompt" onClick={() => onPromptClick && onPromptClick(p)}>{p}</button>
+            ))}
           </div>
         </div>
       )}
@@ -296,7 +313,7 @@ function AgenticChat({ messages, loading }) {
                     {renderChatText(msg.summary || generateChatSummary(msg.query, msg.results, msg.total))}
                   </div>
                   <div className="chat-meta-bar">
-                    <span>{msg.total ?? msg.results.length} result(s) \u2022 {msg.took_ms ?? 0}ms</span>
+                    <span>{msg.total ?? msg.results.length} result(s) {"\u2022"} {msg.took_ms ?? 0}ms</span>
                     {msg.capability && <span className="chat-cap-badge">{msg.capability}</span>}
                   </div>
                   <details className="chat-sources">
@@ -704,6 +721,7 @@ function App() {
   };
 
   // ---- Schema fetch ----
+  const schemaLoadedRef = useRef(false);
   const fetchSchema = useCallback(async (index) => {
     if (!index) return;
     try {
@@ -711,14 +729,21 @@ function App() {
       const data = await res.json();
       if (!data.error) {
         setSchema(data);
-        handleTemplateChange(data.suggested_template || "document");
-        // Set agentic mode based on agent type — only on initial load
-        if (data.agentic_agent_type && !schema) {
-          setAgenticMode(data.agentic_agent_type === "conversational" ? "chat" : "search");
+        // Only apply suggested_template on the first load, not on every refetch
+        if (!schemaLoadedRef.current) {
+          schemaLoadedRef.current = true;
+          const suggested = data.suggested_template || "document";
+          setActiveTemplate(suggested);
+          if (suggested === "agent") {
+            setComparisonEnabled(false);
+          }
+          if (data.agentic_agent_type) {
+            setAgenticMode(data.agentic_agent_type === "conversational" ? "chat" : "search");
+          }
         }
       }
     } catch (_) {}
-  }, [handleTemplateChange]);
+  }, []);
 
   // ---- Suggestions ----
   const loadSuggestions = async (index) => {
@@ -1103,21 +1128,44 @@ function App() {
           <div className="tpl-grid">
             {TEMPLATES.map((t) => {
               const disabled = !!t.disabled;
+              const isAgent = t.id === "agent";
+              const isActive = activeTemplate === t.id;
               return (
-                <button
-                  key={t.id}
-                  className={`tpl-card ${activeTemplate === t.id ? "on" : ""} ${disabled ? "disabled" : ""}`}
-                  disabled={disabled}
-                  title=""
-                  onClick={() => {
-                    if (disabled) return;
-                    handleTemplateChange(t.id);
-                  }}
-                >
-                  <div className="tpl-card-icon"><TemplateIcon id={t.id} /></div>
-                  <div className="tpl-card-label">{t.label}</div>
-                  {schema?.suggested_template === t.id && <span className="template-auto">auto</span>}
-                </button>
+                <div key={t.id} className={`tpl-card-wrap ${isAgent && isActive ? "expanded" : ""}`}>
+                  <button
+                    className={`tpl-card ${isActive ? "on" : ""} ${disabled ? "disabled" : ""}`}
+                    disabled={disabled}
+                    title=""
+                    onClick={() => {
+                      if (disabled) return;
+                      handleTemplateChange(t.id);
+                    }}
+                  >
+                    <div className="tpl-card-icon"><TemplateIcon id={t.id} /></div>
+                    <div className="tpl-card-label">{t.label}</div>
+                    {schema?.suggested_template === t.id && <span className="template-auto">auto</span>}
+                  </button>
+                  {isAgent && isActive && (
+                    <div className="agent-mode-sub">
+                      <button
+                        className={`agent-mode-opt ${agenticMode === "search" ? "active" : ""}`}
+                        onClick={(e) => { e.stopPropagation(); setAgenticMode("search"); }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        Search
+                        <span className="agent-mode-opt-desc">Answer + results</span>
+                      </button>
+                      <button
+                        className={`agent-mode-opt ${agenticMode === "chat" ? "active" : ""}`}
+                        onClick={(e) => { e.stopPropagation(); setAgenticMode("chat"); }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        Chat
+                        <span className="agent-mode-opt-desc">Conversational</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -1169,29 +1217,10 @@ function App() {
         </div>
       )}
 
-      <section className="search-panel">
-            {/* Search bar — always visible. In agent mode, toggle is inline */}
+      <section className={`search-panel ${activeTemplate === "agent" && agenticMode === "chat" ? "chat-layout" : ""}`}>
+            {/* Search input bar — hidden for chat mode (lives at bottom) */}
+            {!(activeTemplate === "agent" && agenticMode === "chat") && (
             <div className="search-row">
-              {activeTemplate === "agent" && (
-                <div className="agentic-mode-toggle" role="radiogroup" aria-label="Agentic mode">
-                  <button
-                    className={`agentic-mode-btn ${agenticMode === "search" ? "active" : ""}`}
-                    onClick={() => setAgenticMode("search")}
-                    role="radio" aria-checked={agenticMode === "search"}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                    Search
-                  </button>
-                  <button
-                    className={`agentic-mode-btn ${agenticMode === "chat" ? "active" : ""}`}
-                    onClick={() => setAgenticMode("chat")}
-                    role="radio" aria-checked={agenticMode === "chat"}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    Chat
-                  </button>
-                </div>
-              )}
               <div className="query-wrap">
                 <span className="query-icon">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1216,21 +1245,23 @@ function App() {
                 )}
               </div>
               <button className="search-btn" onClick={() => runSearch(query)} disabled={loading}>
-                {loading ? "..." : (activeTemplate === "agent" && agenticMode === "chat" ? "Send" : "Search")}
+                {loading ? "..." : "Search"}
               </button>
-              {activeTemplate === "agent" && agenticMode === "chat" && chatMessages.length > 0 && (
-                <button className="clear-chat-btn" onClick={() => { setChatMessages([]); setMemoryId(null); }}>
-                  Clear
-                </button>
-              )}
             </div>
+            )}
 
-            {/* Suggestions - hidden in agent mode */}
-            {activeTemplate !== "agent" && (
+            {/* Suggestions - shown under search bar for all modes except chat */}
+            {!(activeTemplate === "agent" && agenticMode === "chat") && (
             <div className="suggestions">
               <div className="chips">
-                {suggestions.slice(0, 5).map((item) => (
-                    <button key={`${item.text}-${item.capability || "none"}`} className="chip" onClick={() => onSuggestionClick(item)}>
+                {(activeTemplate === "agent"
+                  ? AGENT_PROMPTS.search.map((text) => ({ text, capability: "" }))
+                  : suggestions.slice(0, 5)
+                ).map((item) => (
+                    <button key={`${item.text}-${item.capability || "none"}`} className="chip" onClick={() => {
+                      if (activeTemplate === "agent") { setQuery(item.text); runSearch(item.text); }
+                      else onSuggestionClick(item);
+                    }}>
                       <span>{item.text}</span>
                       {item.capability && (
                         <span className={`cap-badge cap-${item.capability}`}>
@@ -1289,7 +1320,35 @@ function App() {
 
                 {/* Template-specific results */}
                 {activeTemplate === "agent" && agenticMode === "chat" && (
-                  <AgenticChat messages={chatMessages} loading={loading} />
+                  <div className="chat-messages-area">
+                    {chatMessages.length > 0 && (
+                      <div className="chat-toolbar">
+                        <button className="new-chat-btn" onClick={() => { setChatMessages([]); setMemoryId(null); }}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                          New conversation
+                        </button>
+                      </div>
+                    )}
+                    <AgenticChat messages={chatMessages} loading={loading} onPromptClick={(text) => { setQuery(text); runSearch(text); }} />
+                    <div className="chat-input-bar">
+                      <div className="query-wrap">
+                        <span className="query-icon">
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                          </svg>
+                        </span>
+                        <input
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { setAutocompleteOptions([]); runSearch(query); } }}
+                          placeholder="Ask a question..."
+                        />
+                      </div>
+                      <button className="search-btn" onClick={() => runSearch(query)} disabled={loading}>
+                        {loading ? "..." : "Send"}
+                      </button>
+                    </div>
+                  </div>
                 )}
                 {activeTemplate === "agent" && agenticMode === "search" && (
                   <>
@@ -1302,9 +1361,6 @@ function App() {
                         </div>
                         <div className="chat-empty-title">Agentic Search</div>
                         <div className="chat-empty-desc">Ask questions in natural language. The AI agent will decompose your query and find relevant results.</div>
-                        <div className="chat-empty-examples">
-                          Try: "Show me sci-fi movies from the 1990s" or "Find horror movies longer than 2 hours"
-                        </div>
                       </div>
                     )}
                     {ragAnswer && (
@@ -1352,7 +1408,6 @@ function App() {
                 {(activeTemplate === "ecommerce" || activeTemplate === "media") && (
                   <EcommerceResults results={results} loading={loading} schema={schema} fieldOverrides={fieldOverrides} filterSource={filterSource} />
                 )}
-                {activeTemplate === "document" && <DocumentResults results={results} loading={loading} filterSource={filterSource} />}
               </>
             )}
       </section>
