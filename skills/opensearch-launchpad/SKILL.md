@@ -232,6 +232,77 @@ Present the plan and wait for user approval.
 
 Execute the approved plan step by step using `opensearch_ops.py` commands: create index, deploy model, create pipeline, index documents, launch UI. Run `opensearch_ops.py --help` for the full command reference. When launching the UI, always present the URL (default: `http://127.0.0.1:8765`) to the user so they can click to open the Search Builder in their browser.
 
+**IMPORTANT: For Agentic Search — AWS Credentials and Agent Type**
+
+When the plan includes agentic search, follow this two-step process:
+
+**Step 1: AWS Credentials for Bedrock Model**
+
+Ask the user for AWS credentials to deploy the Bedrock Claude model:
+
+> "To deploy the Bedrock Claude model for agentic search, I'll need your AWS credentials. Please provide:
+> - AWS Access Key ID
+> - AWS Secret Access Key
+> - AWS Session Token (optional, only if using temporary credentials)
+> - AWS Region (default: us-east-1)
+>
+> Note: These credentials will be used only for model deployment and not stored. I'll instruct you to delete this message after deployment."
+
+Once credentials are provided, use the `deploy-agentic-model` command with the credentials passed as parameters, then **immediately instruct the user to delete the chat message containing the credentials**:
+
+> "✅ Model deployed successfully!
+>
+> **IMPORTANT: Please delete your message containing the AWS credentials above to remove them from chat history.**"
+
+**Step 2: Ask About Agent Type**
+
+ALWAYS ask the user which agent type they need BEFORE creating the agent:
+
+> "Which agent type do you need for agentic search?
+>
+> **1. Flow Agent** (Recommended for most cases)
+> - ⚡ Faster response times
+> - 💰 Lower cost
+> - Each query is independent
+> - ✅ Best for: REST APIs, search apps where each query stands alone
+>
+> **2. Conversational Agent** (For chat/conversational interfaces)
+> - 💬 Multi-turn conversations with memory
+> - 🔗 Remembers context from previous questions
+> - Supports follow-up questions like "What about blue ones?" after asking about red items
+> - ⏱️ Slower responses, higher cost
+> - ✅ Best for: Chat bots, Q&A interfaces, conversational search
+>
+> **Example difference:**
+>
+> Flow Agent:
+>   User: "Show me red cars under $30k" → Works ✅
+>   User: "What about blue ones?" → Doesn't understand what "ones" means ❌
+>
+> Conversational Agent:
+>   User: "Show me red cars under $30k" → Works ✅
+>   User: "What about blue ones?" → Understands: blue cars under $30k ✅
+>
+> Which type do you need?"
+
+Then use the appropriate commands:
+
+**For Flow Agent:**
+1. Create agent: `create-flow-agent --name <name> --model-id <model-id>`
+2. Create pipeline: `create-flow-agentic-pipeline --name <pipeline-name> --agent-id <agent-id> --index <index-name>`
+
+**For Conversational Agent:**
+1. Create agent: `create-conversational-agent --name <name> --model-id <model-id> --max-iterations 10`
+2. Deploy RAG model: `deploy-rag-model --region <region>` (uses /invoke API, separate from the agent's /converse model)
+3. Create pipeline with RAG: `create-conversational-agent-pipeline --name <pipeline-name> --agent-id <agent-id> --index <index-name> --model-id <RAG_MODEL_ID>`
+
+**IMPORTANT:** The pipeline creation command MUST match the agent type:
+- Flow Agent → use `create-flow-agentic-pipeline`
+- Conversational Agent → use `create-conversational-agent-pipeline` (includes RAG processor for NLQ answers)
+- Conversational Agent requires a separate RAG model (`deploy-rag-model`) because the RAG processor uses the Bedrock /invoke API, not /converse
+
+See `references/knowledge/agentic_search_guide.md` section 2.3 for the detailed decision matrix.
+
 After the UI is running, present the next steps:
 > "Your search app is live! Here's what you can do next:"
 > 1. **Evaluate search quality** (Phase 4.5) — I'll run test queries, measure relevance metrics (nDCG, precision, MRR), and suggest improvements.
