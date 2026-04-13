@@ -5028,6 +5028,14 @@ def _search_ui_search(
             try:
                 response = opensearch_client.search(index=index_name, body=executed_body)
                 
+                # Retry once on zero hits — the agent may generate different DSL
+                # on a second attempt due to LLM non-determinism.
+                if not response.get("hits", {}).get("hits"):
+                    try:
+                        response = opensearch_client.search(index=index_name, body=executed_body)
+                    except Exception:
+                        pass  # Keep the original zero-hit response
+                
                 hits_out: list[dict] = []
                 for hit in response.get("hits", {}).get("hits", []):
                     source = hit.get("_source", {})

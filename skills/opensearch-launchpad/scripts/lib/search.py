@@ -884,6 +884,13 @@ def search_ui_search(
     search_timeout = 60 if is_agentic else 10
     try:
         response = client.search(index=index_name, body=executed_body, request_timeout=search_timeout)
+        # Retry once on zero hits for agentic queries — the agent may generate
+        # different DSL on a second attempt due to LLM non-determinism.
+        if is_agentic and query and not response.get("hits", {}).get("hits"):
+            try:
+                response = client.search(index=index_name, body=executed_body, request_timeout=search_timeout)
+            except Exception:
+                pass  # Keep the original zero-hit response
     except Exception as query_error:
         if query:
             fallback_reason = f"primary query failed: {query_error}"

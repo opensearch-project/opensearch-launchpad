@@ -1180,3 +1180,135 @@ def test_generate_agent_prompts_caching():
     # Second call should use cache, not call search again
     assert call_count == 1
     assert result1 == result2
+
+
+# ---------------------------------------------------------------------------
+# search_ui_search — agentic zero-hit retry
+# ---------------------------------------------------------------------------
+def test_search_ui_search_agentic_zero_hits_retries():
+    """When agentic search returns zero hits, it should retry once."""
+    _search_configs.clear()
+
+    call_count = 0
+    zero_response = {
+        "hits": {"hits": [], "total": {"value": 0}},
+        "took": 500,
+        "ext": {"dsl_query": '{"query":{"term":{"genres.keyword":"Action"}}}'},
+    }
+    hit_response = {
+        "hits": {
+            "hits": [{"_id": "1", "_score": 1.0, "_source": {"title": "The Matrix"}}],
+            "total": {"value": 1},
+        },
+        "took": 800,
+        "ext": {"dsl_query": '{"query":{"match_all":{}}}'},
+    }
+
+    class _RetryClient(_FakeClient):
+        def search(self, index, body, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # First call returns zero hits, second returns results
+            if call_count == 1:
+                return zero_response
+            return hit_response
+
+    client = _make_agentic_client("agentic_flow")
+    # Replace the search method with our retry-tracking version
+    retry_client = _RetryClient()
+    original_search = client.search
+    client.search = retry_client.search
+
+    result = search_ui_search(client, "idx", "show me action movies")
+    assert call_count == 2, "Should have retried once on zero hits"
+    assert len(result["hits"]) == 1
+    assert result["hits"][0]["id"] == "1"
+
+
+def test_search_ui_search_agentic_zero_hits_both_attempts():
+    """When both agentic attempts return zero hits, return zero hits gracefully."""
+    _search_configs.clear()
+
+    call_count = 0
+    zero_response = {
+        "hits": {"hits": [], "total": {"value": 0}},
+        "took": 500,
+        "ext": {"dsl_query": '{"query":{"term":{"genres.keyword":"SciFi"}}}'},
+    }
+
+    class _AlwaysEmptyClient(_FakeClient):
+        def search(self, index, body, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return zero_response
+
+    client = _make_agentic_client("agentic_flow")
+    client.search = _AlwaysEmptyClient().search
+
+    result = search_ui_search(client, "idx", "find scifi movies")
+    assert call_count == 2, "Should have retried once even though both returned zero"
+    assert len(result["hits"]) == 0
+    assert result["total"] == 0
+
+
+def test_search_ui_search_agentic_retry_exception_keeps_original():
+    """If the retry raises an exception, keep the original zero-hit response."""
+    _search_configs.clear()
+
+    call_count = 0
+    zero_response = {
+        "hits": {"hits": [], "total": {"value": 0}},
+        "took": 500,
+    }
+
+    class _RetryFailsClient(_FakeClient):
+        def search(self, index, body, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return zero_response
+            raise RuntimeError("retry failed")
+
+    client = _make_agentic_client("agentic_flow")
+    client.search = _RetryFailsClient().search
+
+    result = search_ui_search(client, "idx", "test query")
+    assert call_count == 2
+    assert len(result["hits"]) == 0
+    assert result["error"] == ""  # No error — graceful degradation
+
+
+def test_search_ui_search_non_agentic_no_retry_on_zero_hits():
+    """Non-agentic searches should NOT retry on zero hits."""
+    _search_configs.clear()
+
+    call_count = 0
+
+    class _CountingClient(_FakeClient):
+        def search(self, index, body, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"hits": {"hits": [], "total": {"value": 0}}, "took": 1}
+
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"idx": {"mappings": {"properties": {"title": {"type": "text"}}}}}
+        def get_settings(self, index):
+            return {"idx": {"settings": {"index": {}}}}
+
+    class _FakeIngest:
+        def get_pipeline(self, id):
+            return {}
+
+    class _FakeTransport:
+        def perform_request(self, method, url, body=None):
+            return {}
+
+    client = _CountingClient()
+    client.indices = _FakeIndices()
+    client.ingest = _FakeIngest()
+    client.transport = _FakeTransport()
+
+    result = search_ui_search(client, "idx", "hello world")
+    assert call_count == 1, "Non-agentic search should not retry"
+    assert len(result["hits"]) == 0
