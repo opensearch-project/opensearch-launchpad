@@ -65,7 +65,7 @@ try:
 except ValueError:
     SEARCH_UI_IDLE_TIMEOUT_SECONDS = 2700
 SEARCH_UI_STATIC_DIR = (
-    Path(__file__).resolve().parent / "ui" / "search_builder"
+    Path(__file__).resolve().parents[1] / "shared" / "ui"
 )
 _MODEL_MEMORY_SIGNAL_TOKENS = (
     "memory constraints",
@@ -128,6 +128,10 @@ _comparison_config: dict[str, object] = {
     "baseline_index": "",
     "improved_index": "",
 }
+
+# Agent prompts cache: {index_name: (timestamp, prompts_dict)}
+_agent_prompts_cache: dict[str, tuple[float, dict]] = {}
+_AGENT_PROMPTS_CACHE_TTL = 300  # 5 minutes
 
 _UI_STATE_FILE = Path(tempfile.gettempdir()) / f"opensearch_search_ui_{SEARCH_UI_PORT}.json"
 _ui_state_mtime: float = 0.0
@@ -694,6 +698,7 @@ def _build_client(use_ssl: bool, http_auth: tuple[str, str] | None = None) -> Op
         "use_ssl": use_ssl,
         "verify_certs": False,
         "ssl_show_warn": False,
+        "timeout": 60,
     }
     if http_auth is not None:
         kwargs["http_auth"] = http_auth
@@ -4730,6 +4735,8 @@ def _resolve_semantic_runtime_hints(
         search_pipeline = ""
 
     # Check if search pipeline is agentic
+    agentic_model_id = ""
+    agentic_agent_type = ""
     if search_pipeline:
         try:
             pipeline_response = opensearch_client.transport.perform_request("GET", f"/_search/pipeline/{search_pipeline}")
@@ -4738,6 +4745,23 @@ def _resolve_semantic_runtime_hints(
             for processor in request_processors:
                 if isinstance(processor, dict) and "agentic_query_translator" in processor:
                     has_agentic_pipeline = True
+                    # Extract agent_id and look up model_id + agent type
+                    agent_id = processor["agentic_query_translator"].get("agent_id", "")
+                    if agent_id:
+                        try:
+                            agent_resp = opensearch_client.transport.perform_request("GET", f"/_plugins/_ml/agents/{agent_id}")
+                            agentic_agent_type = agent_resp.get("type", "flow")
+                            # Flow agent: model_id is in tools[QueryPlanningTool].parameters.model_id
+                            for tool in agent_resp.get("tools", []):
+                                if tool.get("type") == "QueryPlanningTool":
+                                    agentic_model_id = tool.get("parameters", {}).get("model_id", "")
+                                    break
+                            # Conversational agent (or no tool model found): model_id is in llm.model_id
+                            if not agentic_model_id:
+                                agentic_model_id = agent_resp.get("llm", {}).get("model_id", "")
+                        except Exception:
+                            agentic_agent_type = ""
+                            agentic_model_id = ""
                     break
         except Exception:
             pass
@@ -4784,6 +4808,8 @@ def _resolve_semantic_runtime_hints(
         "default_pipeline": default_pipeline,
         "search_pipeline": search_pipeline,
         "has_agentic_pipeline": str(has_agentic_pipeline).lower(),
+        "agentic_model_id": agentic_model_id,
+        "agentic_agent_type": agentic_agent_type,
         "source_field": source_field,
     }
 
@@ -4928,11 +4954,13 @@ def _search_ui_search(
     debug: bool = False,
     search_intent: str = "",
     field_hint: str = "",
+    memory_id: str = "",
 ) -> dict:
     if not index_name:
         return {
             "error": "Missing index name.",
             "hits": [],
+            "total": 0,
             "took_ms": 0,
             "query_mode": "",
             "capability": "",
@@ -4981,74 +5009,131 @@ def _search_ui_search(
         lexical_query = _build_default_lexical_query(query=query, fields=lexical_fields)
         manual_structured_clauses: list[dict[str, object]] | None = None
 
-        # Check if this is an agentic search query (multi-step question)
-        if has_agentic_pipeline and capability == "manual":
-            # Detect multi-step questions that should use agentic search
-            query_lower = query.lower()
-            agentic_indicators = [
-                " and ",
-                " or ",
-                "why",
-                "how",
-                "what are",
-                "show me",
-                "find",
-                "compare",
-                "top",
-                "best",
-                "under",
-                "over",
-                "between",
-                "?",
-            ]
-            if any(indicator in query_lower for indicator in agentic_indicators):
-                # Use agentic search with correct query format
-                executed_body = {
-                    "size": size,
-                    "query": {
-                        "agentic": {
-                            "query_text": query
-                        }
-                    }
-                }
-                query_mode = "agentic_search"
-                capability = "agentic"
-                used_semantic = True
+        # When agentic pipeline is configured, route ALL queries through it.
+        # The agentic agent handles query decomposition internally.
+        if has_agentic_pipeline:
+            agentic_query = {"query_text": query}
+            if memory_id:
+                agentic_query["memory_id"] = memory_id
+            executed_body = {
+                "size": size,
+                "query": {
+                    "agentic": agentic_query
+                },
+            }
+            query_mode = "agentic_search"
+            capability = "agentic"
+            used_semantic = True
+            
+            try:
+                response = opensearch_client.search(index=index_name, body=executed_body)
                 
-                try:
-                    response = opensearch_client.search(index=index_name, body=executed_body)
-                    
-                    # Debug: Log the raw response
-                    if debug:
-                        print(f"[DEBUG] Agentic search response: {json.dumps(response, indent=2)}")
-                    
-                    hits_out: list[dict] = []
-                    for hit in response.get("hits", {}).get("hits", []):
-                        source = hit.get("_source", {})
-                        hits_out.append(
-                            {
-                                "id": hit.get("_id"),
-                                "score": hit.get("_score"),
-                                "preview": _search_ui_preview_text(source),
-                                "source": _strip_vector_fields(source),
+                # Retry once on zero hits — the agent may generate different DSL
+                # on a second attempt due to LLM non-determinism.
+                if not response.get("hits", {}).get("hits"):
+                    try:
+                        response = opensearch_client.search(index=index_name, body=executed_body)
+                    except Exception:
+                        pass  # Keep the original zero-hit response
+                
+                hits_out: list[dict] = []
+                for hit in response.get("hits", {}).get("hits", []):
+                    source = hit.get("_source", {})
+                    hits_out.append(
+                        {
+                            "id": hit.get("_id"),
+                            "score": hit.get("_score"),
+                            "preview": _search_ui_preview_text(source),
+                            "source": _strip_vector_fields(source),
+                        }
+                    )
+                # Extract memory_id, agent_steps_summary, dsl_query from ext field
+                ext = response.get("ext", {})
+                if not isinstance(ext, dict):
+                    ext = {}
+                response_memory_id = ext.get("memory_id", "")
+                agent_steps_summary = ext.get("agent_steps_summary", "")
+                dsl_query = ext.get("dsl_query", "")
+                # Extract RAG-generated natural language answer
+                rag_answer = ""
+                rag_ext = ext.get("retrieval_augmented_generation", {})
+                if isinstance(rag_ext, dict):
+                    rag_answer = rag_ext.get("answer", "")
+                if not rag_answer:
+                    qa_ext = ext.get("generative_qa_parameters", {})
+                    if isinstance(qa_ext, dict):
+                        rag_answer = qa_ext.get("answer", "")
+                result = {
+                    "error": "",
+                    "hits": hits_out,
+                    "total": response.get("hits", {}).get("total", {}).get("value", len(hits_out)),
+                    "took_ms": response.get("took", 0),
+                    "query_mode": query_mode,
+                    "capability": capability,
+                    "used_semantic": used_semantic,
+                    "fallback_reason": fallback_reason,
+                    **({"query_body": executed_body} if debug else {}),
+                }
+                if response_memory_id:
+                    result["memory_id"] = response_memory_id
+                if agent_steps_summary:
+                    result["agent_steps_summary"] = agent_steps_summary
+                if dsl_query:
+                    result["dsl_query"] = dsl_query
+                if rag_answer:
+                    result["rag_answer"] = rag_answer
+                
+                # Generate natural language summary via LLM if no rag_answer from pipeline
+                if not rag_answer and hits_out:
+                    try:
+                        # Build context from top results
+                        context_parts = []
+                        for i, hit in enumerate(hits_out[:5]):
+                            src = hit.get("source", {})
+                            parts = [f"{i+1}."]
+                            for key, val in src.items():
+                                if val is not None and not isinstance(val, (dict, list)) and str(val).strip():
+                                    sv = str(val).strip()
+                                    if len(sv) > 120:
+                                        sv = sv[:117] + "..."
+                                    parts.append(f"{key}: {sv}")
+                                if len(parts) > 8:
+                                    break
+                            context_parts.append(" | ".join(parts))
+                        context_text = "\n".join(context_parts)
+                        total_count = result.get("total", len(hits_out))
+                        
+                        llm_prompt = f"The user asked: \"{query}\"\n\nSearch returned {total_count} results. Here are the top matches:\n{context_text}\n\nProvide a brief, conversational summary of these results. Mention specific items and key details. Keep it under 100 words."
+                        
+                        predict_body = {
+                            "parameters": {
+                                "system_prompt": "You are a helpful search assistant. Summarize search results concisely.",
+                                "user_prompt": llm_prompt,
                             }
+                        }
+                        llm_response = opensearch_client.transport.perform_request(
+                            "POST",
+                            f"/_plugins/_ml/models/{runtime_hints.get('agentic_model_id', '')}/_predict",
+                            body=predict_body,
                         )
-                    return {
-                        "error": "",
-                        "hits": hits_out,
-                        "total": response.get("hits", {}).get("total", {}).get("value", len(hits_out)),
-                        "took_ms": response.get("took", 0),
-                        "query_mode": query_mode,
-                        "capability": capability,
-                        "used_semantic": used_semantic,
-                        "fallback_reason": fallback_reason,
-                        **({"query_body": executed_body} if debug else {}),
-                    }
-                except Exception as e:
-                    fallback_reason = f"agentic search failed: {e}"
-                    # Fall through to regular search logic
+                        # Extract answer from Bedrock Converse response
+                        inference = llm_response.get("inference_results", [{}])[0]
+                        output_data = inference.get("output", [{}])[0].get("dataAsMap", {})
+                        answer_text = output_data.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+                        if answer_text:
+                            result["rag_answer"] = answer_text
+                    except Exception:
+                        pass  # Fall back to client-side summary
+                
+                return result
+            except Exception as e:
+                fallback_reason = f"agentic search failed: {e}"
+                used_semantic = False
+                query_mode = "agentic_search_fallback_bm25"
+                executed_body = _build_default_lexical_body(query=query, size=size, fields=lexical_fields)
+                # Skip capability routing — go straight to BM25 execution
 
-        if capability == "manual":
+        if capability == "manual" and not has_agentic_pipeline:
             manual_structured_clauses, _ = _parse_structured_clauses(
                 query_text=query,
                 suggestion_meta=None,
@@ -5256,8 +5341,9 @@ def _search_ui_search(
                     executed_body = _build_default_lexical_body(query=query, size=size, fields=lexical_fields)
                     query_mode = f"{capability}_bm25_fallback"
         else:
-            executed_body = _build_default_lexical_body(query=query, size=size, fields=lexical_fields)
-            query_mode = "bm25_default"
+            if not has_agentic_pipeline:
+                executed_body = _build_default_lexical_body(query=query, size=size, fields=lexical_fields)
+                query_mode = "bm25_default"
     else:
         executed_body = {"size": size, "query": {"match_all": {}}}
 
@@ -5613,7 +5699,9 @@ def detect_index_profile(index_name: str) -> dict:
         any(hint in name.lower() for hint in _ecommerce_hints) for name in keyword_fields
     )
 
-    if has_price_field or (has_image_field and has_ecommerce_field):
+    if has_agentic:
+        template = "agent"
+    elif has_price_field or (has_image_field and has_ecommerce_field):
         template = "ecommerce"
     elif text_fields or vector_fields:
         template = "document"
@@ -5643,7 +5731,119 @@ def detect_index_profile(index_name: str) -> dict:
         "suggested_template": template,
         "has_semantic": has_semantic,
         "has_agentic": has_agentic,
+        "agentic_agent_type": runtime_hints.get("agentic_agent_type", ""),
     }
+
+def _generate_agent_prompts(index_name: str) -> dict[str, list[str]]:
+    """Generate data-aware prompts for the agent template UI.
+
+    Mirrors skills/opensearch-launchpad/scripts/lib/search.py::generate_agent_prompts.
+    Results are cached per index for 5 minutes.
+    """
+    cached = _agent_prompts_cache.get(index_name)
+    if cached:
+        ts, prompts = cached
+        if time.time() - ts < _AGENT_PROMPTS_CACHE_TTL:
+            return prompts
+
+    fallback: dict[str, list[str]] = {"search": [], "chat": []}
+    try:
+        opensearch_client = _create_client()
+        resp = opensearch_client.search(
+            index=index_name,
+            body={"size": 3, "query": {"match_all": {}}},
+            params={"search_pipeline": "_none"},
+        )
+        hits = resp.get("hits", {}).get("hits", [])
+        if not hits:
+            return fallback
+
+        field_samples: dict[str, str] = {}
+        for hit in hits:
+            src = hit.get("_source", {})
+            for key, val in src.items():
+                if val is not None and not isinstance(val, (dict, list)):
+                    sv = str(val).strip()
+                    if sv and key not in field_samples and len(sv) < 100:
+                        field_samples[key] = sv
+
+        # Try LLM-based generation
+        field_specs = _extract_index_field_specs(opensearch_client, index_name)
+        runtime_hints = _resolve_semantic_runtime_hints(opensearch_client, index_name, field_specs)
+        agentic_model_id = runtime_hints.get("agentic_model_id", "")
+
+        if agentic_model_id:
+            try:
+                field_desc = "\n".join(
+                    f"- {k}: {v}" for k, v in list(field_samples.items())[:10]
+                )
+                prompt = (
+                    f"Given an OpenSearch index '{index_name}' with these fields and sample values:\n"
+                    f"{field_desc}\n\n"
+                    "Generate exactly 4 natural language SEARCH queries and 4 CHAT queries.\n\n"
+                    "SEARCH queries: specific lookups that find particular items.\n"
+                    "CHAT queries: conversational questions that explore the data or ask for recommendations.\n\n"
+                    '{"search": [...], "chat": [...]}\n'
+                    "No explanation, just the JSON."
+                )
+                predict_body = {
+                    "parameters": {
+                        "system_prompt": "You generate example search queries. Return only valid JSON.",
+                        "user_prompt": prompt,
+                    }
+                }
+                llm_resp = opensearch_client.transport.perform_request(
+                    "POST",
+                    f"/_plugins/_ml/models/{agentic_model_id}/_predict",
+                    body=predict_body,
+                )
+                inference = llm_resp.get("inference_results", [{}])[0]
+                output_data = inference.get("output", [{}])[0].get("dataAsMap", {})
+                text = (
+                    output_data.get("output", {})
+                    .get("message", {})
+                    .get("content", [{}])[0]
+                    .get("text", "")
+                )
+                if text:
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed.get("search"), list) and isinstance(
+                        parsed.get("chat"), list
+                    ):
+                        result = {
+                            "search": [str(s) for s in parsed["search"][:4]],
+                            "chat": [str(s) for s in parsed["chat"][:4]],
+                        }
+                        _agent_prompts_cache[index_name] = (time.time(), result)
+                        return result
+            except Exception:
+                pass
+
+        # Heuristic fallback
+        fields = list(field_samples.keys())
+        search_prompts: list[str] = []
+        chat_prompts: list[str] = []
+        if fields:
+            f0 = fields[0]
+            v0 = field_samples.get(f0, "")
+            search_prompts.append(f"Find items where {f0} is '{v0}'")
+            if len(fields) > 1:
+                search_prompts.append(f"Show me entries with specific {fields[1]}")
+            search_prompts.append("Top rated items in this collection")
+            search_prompts.append("Recent entries added to the index")
+            chat_prompts.append(f"What types of {f0} are in this dataset?")
+            chat_prompts.append("Summarize the most common categories")
+            chat_prompts.append("What patterns do you see in the data?")
+            chat_prompts.append("Recommend something interesting")
+
+        result = {"search": search_prompts[:4], "chat": chat_prompts[:4]}
+        _agent_prompts_cache[index_name] = (time.time(), result)
+        return result
+    except Exception:
+        return fallback
 
 
 class _SearchUIRequestHandler(BaseHTTPRequestHandler):
@@ -5727,6 +5927,15 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
                 self._write_json({"error": str(e)}, status=500)
             return
 
+        if parsed.path == "/api/agent-prompts":
+            index_name = params.get("index", [""])[0] or _search_ui.default_index
+            try:
+                prompts = _generate_agent_prompts(index_name)
+                self._write_json(prompts)
+            except Exception as e:
+                self._write_json({"search": [], "chat": [], "error": str(e)})
+            return
+
         if parsed.path == "/api/suggestions":
             index_name = params.get("index", [""])[0] or _search_ui.default_index
             suggestions, suggestion_meta = _search_ui_suggestions(index_name, max_count=8)
@@ -5762,6 +5971,7 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
             query_text = params.get("q", [""])[0]
             search_intent = params.get("intent", [""])[0]
             field_hint = params.get("field", [""])[0]
+            memory_id_param = params.get("memory_id", [""])[0]
             debug_param = params.get("debug", ["0"])[0].strip().lower()
             debug_mode = debug_param in {"1", "true", "yes", "on"}
             try:
@@ -5778,6 +5988,7 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
                     debug=debug_mode,
                     search_intent=search_intent,
                     field_hint=field_hint,
+                    memory_id=memory_id_param,
                 )
                 self._write_json(result)
             except Exception as e:
@@ -5785,6 +5996,7 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
                     {
                         "error": str(e),
                         "hits": [],
+                        "total": 0,
                         "took_ms": 0,
                         "query_mode": "",
                         "capability": "",
@@ -5826,15 +6038,26 @@ class _SearchUIRequestHandler(BaseHTTPRequestHandler):
                 else:
                     query_text = body.get("q", body.get("query_text", ""))
                     debug = body.get("debug", False)
+                    memory_id_val = body.get("memory_id", "")
                     result = _search_ui_search(
                         index_name=index_name,
                         query_text=query_text,
                         size=size,
                         debug=debug,
+                        memory_id=memory_id_val,
                     )
                     self._write_json(result)
             except Exception as e:
-                self._write_json({"error": str(e)}, status=500)
+                self._write_json({
+                    "error": str(e),
+                    "hits": [],
+                    "total": 0,
+                    "took_ms": 0,
+                    "query_mode": "",
+                    "capability": "",
+                    "used_semantic": False,
+                    "fallback_reason": "",
+                }, status=500)
             return
         self._write_json({"error": "Not found"}, status=404)
 
