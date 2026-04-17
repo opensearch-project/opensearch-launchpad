@@ -1,0 +1,98 @@
+name: Sync skills to opensearch-agent-skills
+
+# Triggers when relevant files change on main
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'skills/opensearch-launchpad/**'
+      - 'shared/ui/**'
+      - 'tests/test_agent_skills_*'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sync:
+    name: Sync to opensearch-agent-skills
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout opensearch-launchpad (source)
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout opensearch-agent-skills (target)
+        uses: actions/checkout@v4
+        with:
+          repository: opensearch-project/opensearch-agent-skills
+          token: ${{ secrets.SYNC_PAT }}
+          path: target
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v6
+
+      # ---------------------------------------------------------------
+      # Run the sync script
+      # ---------------------------------------------------------------
+      - name: Run sync
+        run: python3 source/.github/scripts/sync_to_agent_skills.py source target
+
+      # ---------------------------------------------------------------
+      # Verify
+      # ---------------------------------------------------------------
+      - name: Verify Python files parse
+        run: |
+          cd target
+          python3 -c "
+          import ast, pathlib
+          for f in pathlib.Path('skills/opensearch-skills/scripts/lib').glob('*.py'):
+              ast.parse(f.read_text())
+              print(f'  {f.name} OK')
+          for f in pathlib.Path('tests').glob('test_agent_skills_*.py'):
+              ast.parse(f.read_text())
+              print(f'  {f.name} OK')
+          "
+
+      - name: Run tests
+        run: |
+          cd target
+          uv run pytest tests/test_agent_skills_*.py -v
+
+      # ---------------------------------------------------------------
+      # Create PR if there are changes
+      # ---------------------------------------------------------------
+      - name: Check for changes
+        id: changes
+        run: |
+          cd target
+          git diff --quiet && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: target
+          token: ${{ secrets.SYNC_PAT }}
+          commit-message: "Sync skills from opensearch-launchpad"
+          title: "[Automated] Sync skills from opensearch-launchpad"
+          body: |
+            Automated sync from [opensearch-launchpad](https://github.com/opensearch-project/opensearch-launchpad).
+
+            Triggered by commit: ${{ github.sha }}
+
+            **Files synced:**
+            - `scripts/lib/*` — Python modules (with ui.py path patch)
+            - `scripts/ui/*` — UI assets (from `shared/ui/`)
+            - `scripts/opensearch_ops.py`, `start_opensearch.sh`, `sample_data/*`
+            - `launchpad/*.md`, `observability/*.md`, `aws/*.md`, `cli-reference.md`
+            - `SKILL.md` (with path rewrites)
+            - `tests/test_agent_skills_*` (with path rewrites, excluding standalone_assets)
+
+            Please review and run tests before merging.
+          branch: automated/sync-from-launchpad
+          delete-branch: true
+          labels: automated,sync

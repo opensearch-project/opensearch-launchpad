@@ -102,7 +102,7 @@ def load_sample_from_file(file_path: str) -> str:
 
 def load_sample_from_url(url: str) -> str:
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "opensearch-launchpad/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "opensearch-skills/1.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             content = resp.read().decode("utf-8", errors="replace")
 
