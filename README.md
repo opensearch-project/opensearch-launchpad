@@ -2,44 +2,32 @@
 
 An AI-powered assistant that guides you from initial requirements to a running OpenSearch search setup. It collects a sample document, gathers preferences, plans a search architecture, and executes the plan — creating indices, ML models, ingest pipelines, and a local search UI — with optional deployment to Amazon OpenSearch Service or Serverless.
 
-Works with **Claude Code**, **Cursor**, **Kiro**, and any agent that supports the [Agent Skills specification](https://agentskills.io/specification).
-
 ---
 
-## Available Skills
+## Install Agent Skills
 
-| Skill | Category | Description |
-|-------|----------|-------------|
-| **[opensearch-launchpad](skills/opensearch-launchpad/)** | General | Get started with OpenSearch. Guides you through semantic, hybrid, neural, and agentic search setup with local execution and optional AWS deployment. |
-
-> More skills coming soon — contributions welcome! See [Contributing a New Skill](https://github.com/opensearch-project/opensearch-launchpad/blob/main/DEVELOPER_GUIDE.md#contributing-a-new-skill).
-
----
-
-## Install a Skill
-
-Install any skill into your project using [`npx skills`](https://agentskills.io):
+Agent skills for OpenSearch have moved to [opensearch-agent-skills](https://github.com/opensearch-project/opensearch-agent-skills). Install them directly using [`npx skills`](https://agentskills.io):
 
 ```bash
-npx skills add opensearch-project/opensearch-launchpad
+npx skills add opensearch-project/opensearch-agent-skills
 ```
 
-This discovers skills under `skills/` and symlinks them into your agent's skill directory (`.claude/skills/`, `.cursor/skills/`, etc.). Works with Claude Code, Cursor, OpenCode, Codex, and [many more](https://agentskills.io).
+This works with **Claude Code**, **Cursor**, **Kiro**, **OpenCode**, **Codex**, and any agent that supports the [Agent Skills specification](https://agentskills.io/specification).
 
 ### Install options
 
 ```bash
 # Install to a specific agent
-npx skills add opensearch-project/opensearch-launchpad -a claude-code
+npx skills add opensearch-project/opensearch-agent-skills -a claude-code
 
 # Install globally (available across all projects)
-npx skills add opensearch-project/opensearch-launchpad -g
+npx skills add opensearch-project/opensearch-agent-skills -g
 
 # Install to all detected agents
-npx skills add opensearch-project/opensearch-launchpad --all
+npx skills add opensearch-project/opensearch-agent-skills --all
 
 # List available skills before installing
-npx skills add opensearch-project/opensearch-launchpad --list
+npx skills add opensearch-project/opensearch-agent-skills --list
 ```
 
 After installing, try:
@@ -71,8 +59,6 @@ Your agent reads the skill instructions and runs the scripts directly — **no M
 | **Agent Skill** | Claude Code, Cursor, Kiro, OpenCode, Codex | Agent reads `SKILL.md` and runs scripts directly via the terminal |
 | **Kiro Power** | Kiro | Kiro runs the MCP server (`opensearch-launchpad`) which exposes phase tools |
 
-The **Agent Skill** path uses standalone scripts with zero dependency on the MCP server or `opensearch_orchestrator` package. The **Kiro Power** path is maintained for backward compatibility with existing Kiro Power installations.
-
 ---
 
 ## Prerequisites
@@ -96,37 +82,26 @@ OpenSearch Launchpad walks you through five phases to build a production-ready s
 | **4.5 Evaluate** | *(Optional)* Evaluate search quality and iterate on the architecture |
 | **5. Deploy** | *(Optional)* Deploy to Amazon OpenSearch Service or Amazon OpenSearch Serverless |
 
-### Quick Start
-
-After installing, just describe what you want to build:
-
-> *"Help me build a hybrid search app for my product catalog"*
-
-The agent guides you through each phase interactively.
-
 ---
 
 ## Repo Structure
 
 ```
-skills/                        # All agent skills
-    opensearch-launchpad/      # Get started with OpenSearch
-            SKILL.md           # Skill instructions (< 500 lines)
-            scripts/           # Execution scripts
-            references/        # Loaded on demand per phase
-    search-relevance/          # Future: query tuning, ranking, evaluation
-    log-analytics/             # Future: log ingestion, parsing, dashboards
-    observability/             # Future: traces, metrics, monitoring
 kiro/                          # Kiro Power integrations
 opensearch_orchestrator/       # MCP server (Kiro Power path only)
+shared/                        # Shared UI components
 tests/                         # All tests
 ```
+
+> **Note:** Agent skills (SKILL.md, scripts, references) now live in [opensearch-agent-skills](https://github.com/opensearch-project/opensearch-agent-skills).
 
 ---
 
 ## Contributing
 
-We welcome new skills! See the [Developer Guide](DEVELOPER_GUIDE.md) for step-by-step instructions on creating a skill, the SKILL.md template, conventions, testing, and the release process.
+See the [Developer Guide](DEVELOPER_GUIDE.md) for contributing to the Kiro Power and MCP server.
+
+For contributing agent skills, see the [opensearch-agent-skills](https://github.com/opensearch-project/opensearch-agent-skills) repository.
 
 ---
 
