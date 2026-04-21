@@ -6,10 +6,10 @@ An AI-powered assistant that guides you from initial requirements to a running O
 
 ## Install Agent Skills
 
-Agent skills for OpenSearch have moved to [opensearch-agent-skills](https://github.com/opensearch-project/opensearch-agent-skills). Install them directly using [`npx skills`](https://agentskills.io):
+Agent skills for OpenSearch have moved to [opensearch-agent-skills](https://github.com/opensearch-project/opensearch-agent-skills). Install the launchpad skill directly using [`npx skills`](https://agentskills.io):
 
 ```bash
-npx skills add opensearch-project/opensearch-agent-skills
+npx skills add opensearch-project/opensearch-agent-skills/launchpad
 ```
 
 This works with **Claude Code**, **Cursor**, **Kiro**, **OpenCode**, **Codex**, and any agent that supports the [Agent Skills specification](https://agentskills.io/specification).
@@ -18,13 +18,13 @@ This works with **Claude Code**, **Cursor**, **Kiro**, **OpenCode**, **Codex**, 
 
 ```bash
 # Install to a specific agent
-npx skills add opensearch-project/opensearch-agent-skills -a claude-code
+npx skills add opensearch-project/opensearch-agent-skills/launchpad -a claude-code
 
 # Install globally (available across all projects)
-npx skills add opensearch-project/opensearch-agent-skills -g
+npx skills add opensearch-project/opensearch-agent-skills/launchpad -g
 
 # Install to all detected agents
-npx skills add opensearch-project/opensearch-agent-skills --all
+npx skills add opensearch-project/opensearch-agent-skills/launchpad --all
 
 # List available skills before installing
 npx skills add opensearch-project/opensearch-agent-skills --list
