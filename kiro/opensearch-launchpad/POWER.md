@@ -204,7 +204,7 @@ This power provides an OpenSearch Search Solution building workflow. It collects
       - `none` => force no authentication
       - `custom` => force provided username/password
       - `default` => force `admin` / `myStrongPassword123!` (internal-only fallback)
-- For option 2, determine whether the user provided a local file path or a URL and use the appropriate source_type (`local_file` or `url`).
+- For option 2, determine whether the user provided a local file path or a URL and use the appropriate source_type (`local_file` or `url`). If the file type is not text based, e.g. pdf or docx, use docling to extract document data first. If docling is not installed, install it first.
 - For option 3 (localhost index):
   - Ask auth mode first only when needed with these user-facing choices: `none` (no-auth) or `custom` (username/password). Do not present `default` as a user-facing choice.
   - If the user does not explicitly request `none` or `custom`, set `localhost_auth_mode="default"` internally.
